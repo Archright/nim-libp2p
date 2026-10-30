@@ -51,7 +51,7 @@ proc manageExpiredRecords*(kad: KadDHT) {.async: (raises: [CancelledError]).} =
   ## Runs indefinitely as a heartbeat loop until cancelled (e.g. via
   ## `cancelSoon` or `cancelAndWait`).
   heartbeat "cleanup expired data entries", kad.config.cleanupDataEntriesInterval:
-    (await kad.store.pruneExpired(nowUnixSeconds())).isOkOr:
+    (await kad.store.pruneExpiredValues(nowUnixSeconds())).isOkOr:
       debug "Failed to prune expired records", err = error
 
 proc dispatchPutVal*(

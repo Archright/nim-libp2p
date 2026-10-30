@@ -91,8 +91,14 @@ method listProvided*(
   ## Keyset paging in ``Key`` byte order. ``after`` is exclusive.
   raiseAssert "[KadStore.listProvided] abstract method not implemented!"
 
-method pruneExpired*(
+method pruneExpiredValues*(
     store: KadStore, now: UnixTimestamp
 ): Future[LPResult[void]] {.async: (raises: [CancelledError]), base, gcsafe.} =
-  ## Deletes every value and provider with ``expiresAt <= now``. The core calls it from its heartbeats.
-  raiseAssert "[KadStore.pruneExpired] abstract method not implemented!"
+  ## Deletes every value with ``expiresAt <= now``. The core calls it from the value heartbeat.
+  raiseAssert "[KadStore.pruneExpiredValues] abstract method not implemented!"
+
+method pruneExpiredProviders*(
+    store: KadStore, now: UnixTimestamp
+): Future[LPResult[void]] {.async: (raises: [CancelledError]), base, gcsafe.} =
+  ## Deletes every provider with ``expiresAt <= now``. The core calls it from the provider heartbeat.
+  raiseAssert "[KadStore.pruneExpiredProviders] abstract method not implemented!"

@@ -78,13 +78,13 @@ template kadStoreTestSuite*(
         (await store.listValues(Opt.none(RecordKey), Now, Unlimited)).get().len == 0
         (await store.getValue(recordKey(1), Now - 1)).get().isNone()
 
-    asyncTest "pruneExpired deletes expired values and keeps live ones":
+    asyncTest "pruneExpiredValues deletes expired values and keeps live ones":
       let store = factory(KadStoreLimits())
       check:
         (await store.putValue(storedValue(1, expiresAt = Now), Now)).get()
         (await store.putValue(storedValue(2), Now)).get()
 
-      check (await store.pruneExpired(Now)).isOk()
+      check (await store.pruneExpiredValues(Now)).isOk()
 
       check:
         (await store.getValue(recordKey(1), Now - 1)).get().isNone()
@@ -106,13 +106,13 @@ template kadStoreTestSuite*(
         (await store.putValue(storedValue(2), Now)).get()
         (await store.getValue(recordKey(1), Now - 1)).get().isNone()
 
-    asyncTest "pruneExpired deletes a value stored after an earlier prune":
+    asyncTest "pruneExpiredValues deletes a value stored after an earlier prune":
       let store = factory(KadStoreLimits())
       check:
         (await store.putValue(storedValue(1), Now)).get()
-        (await store.pruneExpired(Now)).isOk()
+        (await store.pruneExpiredValues(Now)).isOk()
         (await store.putValue(storedValue(2, expiresAt = Now + 1), Now)).get()
-        (await store.pruneExpired(Now + 1)).isOk()
+        (await store.pruneExpiredValues(Now + 1)).isOk()
         (await store.getValue(recordKey(2), Now)).get().isNone()
         (await store.getValue(recordKey(1), Now + 1)).get().isSome()
 
@@ -313,21 +313,21 @@ template kadStoreTestSuite*(
           AddProviderOutcome.added
         (await keyCapped.getProviders(key, Now, Unlimited)).get() == @[fresh]
 
-    asyncTest "pruneExpired deletes a provider stored after an earlier prune":
+    asyncTest "pruneExpiredProviders deletes a provider stored after an earlier prune":
       let store = factory(KadStoreLimits())
       let peers = PeerId.random(2)
       let shortLived = storedProvider(peers[1], expiresAt = Now + 1)
       check:
         (await store.addProvider(key, storedProvider(peers[0]), Now, Unlimited)).get() ==
           AddProviderOutcome.added
-        (await store.pruneExpired(Now)).isOk()
+        (await store.pruneExpiredProviders(Now)).isOk()
         (await store.addProvider(key, shortLived, Now, Unlimited)).get() ==
           AddProviderOutcome.added
-        (await store.pruneExpired(Now + 1)).isOk()
+        (await store.pruneExpiredProviders(Now + 1)).isOk()
         (await store.getProviders(key, Now, Unlimited)).get() ==
           @[storedProvider(peers[0])]
 
-    asyncTest "pruneExpired deletes a provider added after a prune at capacity":
+    asyncTest "pruneExpiredProviders deletes a provider added after a prune at capacity":
       let store = factory(KadStoreLimits(maxProviders: Opt.some(1)))
       let peers = PeerId.random(2)
       let expired = storedProvider(peers[0], expiresAt = Now)
@@ -337,7 +337,7 @@ template kadStoreTestSuite*(
           AddProviderOutcome.added
         (await store.addProvider(key, shortLived, Now, Unlimited)).get() ==
           AddProviderOutcome.added
-        (await store.pruneExpired(Now + 1)).isOk()
+        (await store.pruneExpiredProviders(Now + 1)).isOk()
         (await store.getProviders(key, Now, Unlimited)).get().len == 0
 
     asyncTest "addProvider rejects a provider without an id":
@@ -384,7 +384,31 @@ template kadStoreTestSuite*(
         (await store.getProviders(key, Now, 1)).get() == @[storedProvider(peers[1])]
         (await store.getProviders(key, Now, 0)).get().len == 0
 
-    asyncTest "pruneExpired deletes expired providers and frees capacity":
+    asyncTest "each prune keeps the expired entries of the other kind":
+      let store = factory(KadStoreLimits())
+      let peer = PeerId.random()
+      check:
+        (await store.putValue(storedValue(1, expiresAt = Now), Now)).get()
+        (
+          await store.addProvider(
+            key, storedProvider(peer, expiresAt = Now), Now, Unlimited
+          )
+        ).get() == AddProviderOutcome.added
+
+      check (await store.pruneExpiredValues(Now)).isOk()
+
+      check:
+        (await store.getValue(recordKey(1), Now - 1)).get().isNone()
+        (await store.getProviders(key, Now - 1, Unlimited)).get().len == 1
+
+      check (await store.putValue(storedValue(2, expiresAt = Now), Now)).get()
+      check (await store.pruneExpiredProviders(Now)).isOk()
+
+      check:
+        (await store.getProviders(key, Now - 1, Unlimited)).get().len == 0
+        (await store.getValue(recordKey(2), Now - 1)).get().isSome()
+
+    asyncTest "pruneExpiredProviders deletes expired providers and frees capacity":
       let store = factory(KadStoreLimits(maxProviders: Opt.some(1)))
       let peers = PeerId.random(2)
       check (
@@ -393,7 +417,7 @@ template kadStoreTestSuite*(
         )
       ).get() == AddProviderOutcome.added
 
-      check (await store.pruneExpired(Now)).isOk()
+      check (await store.pruneExpiredProviders(Now)).isOk()
 
       check:
         (await store.getProviders(key, Now - 1, Unlimited)).get().len == 0
@@ -422,7 +446,7 @@ template kadStoreTestSuite*(
           ).get() == AddProviderOutcome.added
           (await store.getProviders(key, Now, Unlimited)).get().len == 0
 
-    asyncTest "pruneExpired keeps the live providers of a key and counts them exactly":
+    asyncTest "pruneExpiredProviders keeps the live providers of a key and counts them exactly":
       let store = factory(KadStoreLimits(maxProviders: Opt.some(3)))
       let peers = PeerId.random(5)
       check:
@@ -436,7 +460,7 @@ template kadStoreTestSuite*(
         (await store.addProvider(key, storedProvider(peers[2]), Now, Unlimited)).get() ==
           AddProviderOutcome.added
 
-      check (await store.pruneExpired(Now)).isOk()
+      check (await store.pruneExpiredProviders(Now)).isOk()
 
       check:
         (await store.getProviders(key, Now - 1, Unlimited)).get() ==
@@ -503,11 +527,11 @@ template kadStoreTestSuite*(
         not (await store.hasProvided(Key.init([1'u8]))).get()
         (await store.addProvided(Key.init([2'u8]))).get()
 
-    asyncTest "provided keys survive pruneExpired":
+    asyncTest "provided keys survive pruneExpiredProviders":
       let store = factory(KadStoreLimits())
       check (await store.addProvided(Key.init([1'u8]))).get()
 
-      check (await store.pruneExpired(high(UnixTimestamp))).isOk()
+      check (await store.pruneExpiredProviders(high(UnixTimestamp))).isOk()
 
       check (await store.hasProvided(Key.init([1'u8]))).get()
 

@@ -324,9 +324,14 @@ method listProvided*(
 ): Future[LPResult[seq[Key]]] {.async: (raises: [CancelledError]), gcsafe.} =
   ok(toSeq(store.providedKeys.page(after, limit)))
 
-method pruneExpired*(
+method pruneExpiredValues*(
     store: MemoryKadStore, now: UnixTimestamp
 ): Future[LPResult[void]] {.async: (raises: [CancelledError]), gcsafe.} =
   store.pruneValues(now)
+  ok()
+
+method pruneExpiredProviders*(
+    store: MemoryKadStore, now: UnixTimestamp
+): Future[LPResult[void]] {.async: (raises: [CancelledError]), gcsafe.} =
   store.pruneProviders(now)
   ok()
