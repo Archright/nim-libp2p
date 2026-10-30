@@ -14,11 +14,12 @@ import
     routing_table, peer_registry, protobuf, types, find, get, put, keyspace, provider,
     ping, ip_diversity,
   ]
-import ./kademlia/[kademlia_metrics, netsize, probe_backoff, rpc, store]
+import ./kademlia/[kademlia_metrics, memory_store, netsize, probe_backoff, rpc, store]
 
 export
   chronicles, routing_table, peer_registry, protobuf, types, find, get, put, keyspace,
-  provider, ping, kademlia_metrics, netsize, probe_backoff, ip_diversity, store
+  provider, ping, kademlia_metrics, netsize, probe_backoff, ip_diversity, store,
+  memory_store
 
 logScope:
   topics = "libp2p kademlia"
@@ -382,6 +383,14 @@ proc initKadBase*(
   kad.config = config
   kad.providerManager =
     ProviderManager.new(config.providerRecordCapacity, config.providedKeyCapacity)
+  kad.store = config.store.valueOr:
+    MemoryKadStore.new(
+      KadStoreLimits(
+        maxValues: config.limits.maxLocalRecords,
+        maxProviders: Opt.some(config.providerRecordCapacity),
+        maxProvided: Opt.some(config.providedKeyCapacity),
+      )
+    )
   kad.nsEstimator = NetworkSizeEstimator.new(config.replication)
   kad.rpcSem = newAsyncSemaphore(config.limits.maxConcurrentRpcs)
   kad.admissionSem = newAsyncSemaphore(config.limits.maxConcurrentProbes)
