@@ -19,7 +19,7 @@ type
     valueKeys: seq[RecordKey] ## the keys of ``values``, sorted
     providers: Table[Key, seq[StoredProvider]]
     providerCount: int
-    provided: HashSet[Key]
+    provided: OrderedSet[Key] ## in provide order
     providedKeys: seq[Key] ## the keys of ``provided``, sorted
     limits: KadStoreLimits
     nextValueExpiry: UnixTimestamp ## no value expires before this time
@@ -211,13 +211,27 @@ method removeProvider*(
     store.providers.del(key)
   ok()
 
+func firstProvided(store: MemoryKadStore): Opt[Key] =
+  for key in store.provided:
+    return Opt.some(key)
+  Opt.none(Key)
+
+proc dropProvided(store: MemoryKadStore, key: Key) =
+  store.provided.excl(key)
+  store.providedKeys.removeKey(key)
+
 method addProvided*(
     store: MemoryKadStore, key: Key
 ): Future[LPResult[bool]] {.async: (raises: [CancelledError]), gcsafe.} =
   if key in store.provided:
+    store.provided.excl(key)
+    store.provided.incl(key)
     return ok(true)
+
   if store.provided.len.atCapacity(store.limits.maxProvided):
-    return ok(false)
+    let first = store.firstProvided().valueOr:
+      return ok(false)
+    store.dropProvided(first)
 
   store.provided.incl(key)
   store.providedKeys.insertKey(key)
@@ -226,8 +240,7 @@ method addProvided*(
 method delProvided*(
     store: MemoryKadStore, key: Key
 ): Future[LPResult[void]] {.async: (raises: [CancelledError]), gcsafe.} =
-  store.provided.excl(key)
-  store.providedKeys.removeKey(key)
+  store.dropProvided(key)
   ok()
 
 method hasProvided*(
