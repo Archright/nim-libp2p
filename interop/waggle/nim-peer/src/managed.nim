@@ -54,7 +54,10 @@ proc managedInterop*(address: string) {.async.} =
 
         inc deliveries
         have = have or pieces[0]
-        doAssert waggle.publish(Topic, BitShard(id: @[byte 1], have: have)).isOk
+        # Pieces may arrive before Rust's subscription on the opposite stream.
+        # The initial publish below includes updates received before then.
+        if subscribed.finished:
+          doAssert waggle.publish(Topic, BitShard(id: @[byte 1], have: have)).isOk
 
   waggle = Waggle.new(switch = switch, rng = random, onEvent = onEvent)
   switch.mount(waggle)
