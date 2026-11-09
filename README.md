@@ -85,6 +85,19 @@ Versioning follows [Semantic Versioning](https://semver.org/):
  - `MINOR` releases may introduce new features and other non-breaking changes.
  - `PATCH` releases are reserved for backwards-compatible bug fixes.
 
+## Axiom external verification
+
+This repository runs an external verification campaign with [Axiom](https://github.com/Archright/axiom-cli)
+(SSOT manifest: `.github/axiom-campaigns/campaign-001.json`): the pinned upstream commit
+`iftech/nim-libp2p@a130a7f3` is verified against the `SPEC-LIBP2P-BV-SLICE` proposition slice in two
+independent runs (legs A/B) through the `ax-verify` reusable workflow, and the `compare` job asserts
+input pins, reproducibility (identical canonical digest), zero footprint (subject tree untouched) and
+environment parity before classifying the outcome — fail-closed, only reproducible verdicts are green.
+
+- Dispatch: Actions tab → "Axiom external verification campaign" → *Run workflow* (manual only; no schedule).
+- Evidence: the run's `campaign-evidence` artifact (both verify-records, comparison report, classification) and the job step summaries.
+- A verdict re-run requires a new campaign (new `EXPERIMENT_ID`); see `rerun_policy` in the manifest.
+
 ## License
 
 Licensed under either of:
