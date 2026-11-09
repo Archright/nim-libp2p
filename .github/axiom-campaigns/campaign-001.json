@@ -1,0 +1,20 @@
+{
+  "identifiers": {
+    "PROJECT_UNDER_TEST": "iftech/nim-libp2p",
+    "PROJECT_REVISION": "a130a7f32219909bdcda14b7f1e64d0804fc832c",
+    "AXIOM_REVISION": "v0.6.0 (Archright/axiom-cli release; manifest.json 정본)",
+    "AXIOM_CONFIGURATION": "external-subject bundle-consumer campaign lane (ax-verify adapter, dry-run, AXIOM_PROVE_WORKERS=1)",
+    "TOOLCHAIN_IDENTITY": "Nim 2.2.10 / Z3 4.13.3 / Lean 4.33.0 (direct pinned downloads, choosenim-free)",
+    "VERIFICATION_SCOPE": "SPEC-LIBP2P-BV-SLICE",
+    "EXPERIMENT_ID": "external-verification-campaign-001"
+  },
+  "execution": {
+    "customer_repository": "Archright/nim-libp2p",
+    "adapter_ref": "156140d3f9613d40c422d452d432de017229f5f9",
+    "legs": [
+      "A",
+      "B"
+    ],
+    "rerun_policy": "new-campaign-only"
+  }
+}

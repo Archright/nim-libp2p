@@ -1,0 +1,601 @@
+# Axiom external verification campaign — S4/S5 (two-run reproducibility +
+# zero-footprint), customer-side dispatch surface.
+#
+# Campaign SSOT: .github/axiom-campaigns/campaign-001.json (7 identifiers +
+# execution metadata). This workflow consumes the manifest; it never
+# re-declares the pins inline — job "compare" cross-checks every observed
+# value against the manifest as the canonical source.
+#
+# Propositions provenance: the pinned SPEC-LIBP2P-BV-SLICE bytesview
+# document is reused VERBATIM from this repository's commit cfed3871
+# (.github/workflows/byo-agent-verify.yml, dispatch mode "main" — emitted by
+# a real LLM in the 2026-11-02 E2E; the workflow file was later reverted,
+# but the pinned document is the canonical bytesview slice). The content is
+# transcribed unmodified: the document's subject identity
+# (iftech/nim-libp2p @ a130a7f3…) must stay identical to the campaign pin,
+# otherwise the engine rejects the document (SUBJECT_MISMATCH, exit 3).
+#
+# Lanes: job "exec" calls the external bundle-consumer adapter — the
+# Archright/axiom-cli reusable workflow ax-verify.yml (axiom v0.6.0 release
+# binary; no source build, no secrets, public repos only) — twice via a
+# matrix (legs A and B, fail-fast disabled so both legs always produce
+# evidence). Each leg uploads a verify-record.json evidence artifact.
+#
+# Authority: job "compare" is the campaign authority. Every assertion is a
+# real comparison with a real exit code (no swallowed failures); the
+# campaign classification is derived from the observed records only —
+# fail-closed. Acceptance (green) classes: PROVED_REPRODUCIBLE,
+# DISPROVED_REPRODUCIBLE, REFUSAL_REPRODUCIBLE only. Guard violations,
+# CONTRADICTION and UNCLASSIFIED all exit 1.
+#
+# compare runs with `if: always()`: a `uses` job cannot carry
+# continue-on-error (probe-verified — GitHub rejects the combination at
+# dispatch, wintrover/axiom-reuse-probe probes C/D), and the ax-verify
+# adapter is red by design on out-of-contract exits (≥2, fail-closed) while
+# still uploading its evidence artifacts. So when a leg fails, the run is
+# red through exec itself, and compare still downloads whatever evidence
+# exists and records the classification — CONTRADICTION/UNCLASSIFIED never
+# silently disappear. (Matrix legs + `${{ matrix.leg }}` passed into the
+# reusable workflow's `with:` inputs is probe-verified working — probe C,
+# run 42544454658.)
+#
+# Dispatch: manual (workflow_dispatch) from the default branch; no
+# schedule. Evidence: "campaign-evidence" artifact (both verify-records,
+# comparison report, manifest copy, classification) + the job step
+# summaries.
+
+name: 'Axiom external verification campaign'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  campaign-manifest:
+    name: 'Job 1 — campaign manifest: validate identifiers + propagate pins'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      subject_repository: ${{ steps.pins.outputs.subject_repository }}
+      subject_commit: ${{ steps.pins.outputs.subject_commit }}
+      axiom_revision: ${{ steps.pins.outputs.axiom_revision }}
+      axiom_configuration: ${{ steps.pins.outputs.axiom_configuration }}
+      toolchain_identity: ${{ steps.pins.outputs.toolchain_identity }}
+      verification_scope: ${{ steps.pins.outputs.verification_scope }}
+      experiment_id: ${{ steps.pins.outputs.experiment_id }}
+      adapter_ref: ${{ steps.pins.outputs.adapter_ref }}
+    steps:
+      - name: 'Checkout campaign manifest'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 'Validate manifest (7 identifiers non-empty · 40-hex pins · unique experiment id)'
+        id: pins
+        env:
+          CAMPAIGN_FILE: .github/axiom-campaigns/campaign-001.json
+          THIS_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [ -f "$CAMPAIGN_FILE" ] || {
+            echo "::error::campaign manifest not found: $CAMPAIGN_FILE"; exit 1; }
+
+          fail=0
+          for key in PROJECT_UNDER_TEST PROJECT_REVISION AXIOM_REVISION \
+                     AXIOM_CONFIGURATION TOOLCHAIN_IDENTITY VERIFICATION_SCOPE \
+                     EXPERIMENT_ID; do
+            val="$(jq -r --arg k "$key" '.identifiers[$k] // ""' "$CAMPAIGN_FILE")"
+            if [ -z "$val" ]; then
+              echo "::error::identifier '$key' is missing or empty in $CAMPAIGN_FILE"
+              fail=1
+            fi
+          done
+
+          rev="$(jq -r '.identifiers.PROJECT_REVISION // ""' "$CAMPAIGN_FILE")"
+          printf '%s' "$rev" | grep -Eq '^[0-9a-fA-F]{40}$' || {
+            echo "::error::PROJECT_REVISION must be a full 40-hex commit SHA (got '${rev:0:12}')"
+            fail=1
+          }
+
+          adapter="$(jq -r '.execution.adapter_ref // ""' "$CAMPAIGN_FILE")"
+          printf '%s' "$adapter" | grep -Eq '^[0-9a-fA-F]{40}$' || {
+            echo "::error::execution.adapter_ref must be a full 40-hex commit SHA (the ax-verify.yml merge pin; got '${adapter:0:12}')"
+            fail=1
+          }
+
+          customer="$(jq -r '.execution.customer_repository // ""' "$CAMPAIGN_FILE")"
+          [ "$customer" = "$THIS_REPOSITORY" ] || {
+            echo "::error::execution.customer_repository ('$customer') does not match this repository ('$THIS_REPOSITORY')"
+            fail=1
+          }
+
+          # EXPERIMENT_ID must be unique across all campaign manifests —
+          # one campaign = one experiment.
+          dups="$(jq -s '[.[].identifiers.EXPERIMENT_ID] | group_by(.) | map(select(length > 1)) | length' .github/axiom-campaigns/*.json)"
+          [ "$dups" -eq 0 ] || {
+            echo "::error::EXPERIMENT_ID is not unique across .github/axiom-campaigns/*.json"
+            fail=1
+          }
+
+          [ "$fail" -eq 0 ] || exit 1
+
+          {
+            echo "subject_repository=$(jq -r '.identifiers.PROJECT_UNDER_TEST' "$CAMPAIGN_FILE")"
+            echo "subject_commit=$rev"
+            echo "axiom_revision=$(jq -r '.identifiers.AXIOM_REVISION' "$CAMPAIGN_FILE")"
+            echo "axiom_configuration=$(jq -r '.identifiers.AXIOM_CONFIGURATION' "$CAMPAIGN_FILE")"
+            echo "toolchain_identity=$(jq -r '.identifiers.TOOLCHAIN_IDENTITY' "$CAMPAIGN_FILE")"
+            echo "verification_scope=$(jq -r '.identifiers.VERIFICATION_SCOPE' "$CAMPAIGN_FILE")"
+            echo "experiment_id=$(jq -r '.identifiers.EXPERIMENT_ID' "$CAMPAIGN_FILE")"
+            echo "adapter_ref=$adapter"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Campaign manifest — external-verification-campaign-001"
+            echo ""
+            echo "| identifier | value |"
+            echo "|---|---|"
+            for key in PROJECT_UNDER_TEST PROJECT_REVISION AXIOM_REVISION \
+                       AXIOM_CONFIGURATION TOOLCHAIN_IDENTITY VERIFICATION_SCOPE \
+                       EXPERIMENT_ID; do
+              echo "| $key | $(jq -r --arg k "$key" '.identifiers[$k]' "$CAMPAIGN_FILE") |"
+            done
+            echo "| execution.adapter_ref | \`$adapter\` |"
+            echo "| execution.legs | $(jq -c '.execution.legs' "$CAMPAIGN_FILE") |"
+            echo "| execution.rerun_policy | $(jq -r '.execution.rerun_policy' "$CAMPAIGN_FILE") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  propositions:
+    name: 'Job 2 — propositions: pinned SPEC-LIBP2P-BV-SLICE document (cfed3871 verbatim)'
+    needs: campaign-manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      proposals_sha256: ${{ steps.emit.outputs.proposals_sha256 }}
+    steps:
+      - name: 'Emit pinned propositions document (verbatim from cfed3871)'
+        id: emit
+        env:
+          WANT_SUBJECT_REPOSITORY: ${{ needs.campaign-manifest.outputs.subject_repository }}
+          WANT_SUBJECT_COMMIT: ${{ needs.campaign-manifest.outputs.subject_commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/campaign/propositions"
+          # VERBATIM reuse — do not edit this document. Source: this repository,
+          # commit cfed3871, .github/workflows/byo-agent-verify.yml, dispatch
+          # mode "main" (the pinned bytesview proposition, LLM-authored in the
+          # 2026-11-02 E2E). The subject identity below must equal the campaign
+          # pins — the engine rejects disagreeing documents (SUBJECT_MISMATCH,
+          # exit 3).
+          cat > "${RUNNER_TEMP}/campaign/propositions/proposals.json" <<'JSON'
+          {"schema_version":1,"subject":{"repository":"iftech/nim-libp2p","commit":"a130a7f32219909bdcda14b7f1e64d0804fc832c"},"agent":{"id":"phase3-selftest-agent","version":"1.0"},"propositions":[{"specId":"SPEC-LIBP2P-BV-SLICE","target":"libp2p/utils/bytesview.nim::toOpenArray","source_location":{"file":"libp2p/utils/bytesview.nim","line":18},"explanation":"Phase 4 fork deployment — pinned BYO proposition (LLM-authored, 2026-11-02 E2E)"}]}
+          JSON
+          python3 -m json.tool "${RUNNER_TEMP}/campaign/propositions/proposals.json" >/dev/null
+
+          # Pre-flight integrity check: the emitted document's subject identity
+          # must equal the manifest pins (guards transcription drift before two
+          # adapter legs are spent).
+          doc_repo="$(jq -r '.subject.repository' "${RUNNER_TEMP}/campaign/propositions/proposals.json")"
+          doc_commit="$(jq -r '.subject.commit' "${RUNNER_TEMP}/campaign/propositions/proposals.json")"
+          if [ "$doc_repo" != "$WANT_SUBJECT_REPOSITORY" ] || [ "$doc_commit" != "$WANT_SUBJECT_COMMIT" ]; then
+            echo "::error::propositions subject identity drift: document says '$doc_repo@${doc_commit:0:12}', campaign pins '$WANT_SUBJECT_REPOSITORY@${WANT_SUBJECT_COMMIT:0:12}' — the cfed3871 verbatim reuse is broken"
+            exit 1
+          fi
+
+          sha="$(sha256sum "${RUNNER_TEMP}/campaign/propositions/proposals.json" | cut -d' ' -f1)"
+          echo "proposals_sha256=$sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Propositions artifact"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| document | SPEC-LIBP2P-BV-SLICE pinned bytesview proposition (cfed3871, verbatim) |"
+            echo "| subject | $doc_repo @ \`$doc_commit\` |"
+            echo "| propositions | $(jq -r '.propositions | length' "${RUNNER_TEMP}/campaign/propositions/proposals.json") |"
+            echo "| sha256 | \`$sha\` |"
+            echo "| artifact | \`propositions\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Upload propositions artifact (Job-2 boundary — data only)'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: 'propositions'
+          path: '${{ runner.temp }}/campaign/propositions/proposals.json'
+          if-no-files-found: error
+
+  exec:
+    name: 'Job 3 — ax-verify adapter (reproducibility legs A/B)'
+    needs: [campaign-manifest, propositions]
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [A, B]
+    permissions:
+      contents: read
+    uses: Archright/axiom-cli/.github/workflows/ax-verify.yml@156140d3f9613d40c422d452d432de017229f5f9
+    with:
+      axiom-version: '0.6.0'
+      subject-repository: 'iftech/nim-libp2p'
+      subject-commit: 'a130a7f32219909bdcda14b7f1e64d0804fc832c'
+      proposals-artifact: 'propositions'
+      run-label: ${{ matrix.leg }}
+
+  compare:
+    name: 'Job 4 — compare: two-run assertions + campaign classification (fail-closed)'
+    # always(): the classification record and campaign evidence must exist for
+    # EVERY exec outcome (a uses-job cannot continue-on-error; the adapter is
+    # red by design on out-of-contract exits while still uploading evidence).
+    # The run stays red whenever exec failed — this only preserves the record.
+    if: always()
+    needs: exec
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: 'Checkout (manifest + this workflow file — pin cross-check source)'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 'Download propositions artifact (sha256 cross-check source)'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: 'propositions'
+          path: '${{ runner.temp }}/campaign/propositions'
+
+      - name: 'Download verify-record evidence (leg A)'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: 'ax-verify-evidence-propositions-A'
+          path: '${{ runner.temp }}/campaign/evidence-A'
+
+      - name: 'Download verify-record evidence (leg B)'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: 'ax-verify-evidence-propositions-B'
+          path: '${{ runner.temp }}/campaign/evidence-B'
+
+      - name: 'Parse verify-records (locate + required-field validation)'
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          mkdir -p "$camp/campaign-evidence"
+          for leg in A B; do
+            dir="${camp}/evidence-${leg}"
+            mapfile -t hits < <(find "$dir" -type f -name verify-record.json 2>/dev/null || true)
+            if [ "${#hits[@]}" -ne 1 ]; then
+              echo "::error::leg ${leg}: expected exactly one verify-record.json under ${dir}, found ${#hits[@]}"
+              exit 1
+            fi
+            cp "${hits[0]}" "${camp}/verify-record-${leg}.json"
+          done
+          required="prove_exit canonical_digest engine_build_id verdict_summary \
+                    zero_footprint_ok runner_image subject_repository subject_commit \
+                    axiom_version bundle_sha256 proposals_sha256 pre_tree_hash \
+                    post_tree_hash runner_image_source"
+          for leg in A B; do
+            f="${camp}/verify-record-${leg}.json"
+            for field in $required; do
+              jq -e --arg f "$field" 'has($f)' "$f" >/dev/null || {
+                echo "::error::leg ${leg}: verify-record.json is missing the required field '$field'"
+                exit 1; }
+            done
+            jq -e '.toolchain | (has("nim") and has("z3") and has("lean") and has("libpcre3"))' "$f" >/dev/null || {
+              echo "::error::leg ${leg}: verify-record.json toolchain must carry nim/z3/lean/libpcre3"
+              exit 1; }
+          done
+          cp .github/axiom-campaigns/campaign-001.json "${camp}/campaign-evidence/campaign-001.json"
+          cp "${camp}/verify-record-A.json" "${camp}/verify-record-B.json" "${camp}/campaign-evidence/"
+          echo "parsed verify-records for legs A and B (all required fields present)"
+
+      - name: 'Assert INPUT_MISMATCH — subject/proposals/axiom identity pins (legs + manifest + workflow)'
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          recA="${camp}/verify-record-A.json"
+          recB="${camp}/verify-record-B.json"
+          manifest=".github/axiom-campaigns/campaign-001.json"
+          props="${camp}/propositions/proposals.json"
+          workflow_file=".github/workflows/axiom-verification.yml"
+          violations=""
+          add() { violations+="$1"$'\n'; }
+
+          [ -f "$recA" ] && [ -f "$recB" ] || { echo "::error::INPUT_MISMATCH: verify-records missing"; exit 1; }
+          [ -f "$props" ] || { echo "::error::INPUT_MISMATCH: propositions artifact file missing"; exit 1; }
+
+          pin_repo="$(jq -r '.identifiers.PROJECT_UNDER_TEST' "$manifest")"
+          pin_commit="$(jq -r '.identifiers.PROJECT_REVISION' "$manifest")"
+          pin_adapter="$(jq -r '.execution.adapter_ref' "$manifest")"
+          props_sha="$(sha256sum "$props" | cut -d' ' -f1)"
+          manifest_axiom="$(jq -r '.identifiers.AXIOM_REVISION' "$manifest" | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+' || true)"
+          manifest_axiom="${manifest_axiom#v}"
+          with_axiom="$(sed -nE "s/^[[:space:]]*axiom-version:[[:space:]]*'([^']+)'.*/\1/p" "$workflow_file" | head -n 1)"
+          uses_pin="$(grep -oE 'Archright/axiom-cli/\.github/workflows/ax-verify\.yml@[0-9a-f]{40}' "$workflow_file" | head -n 1 | cut -d'@' -f2)"
+
+          [ -n "$manifest_axiom" ] || add "cannot parse a semantic version from manifest AXIOM_REVISION"
+          [ -n "$with_axiom" ] || add "cannot parse the axiom-version input from $workflow_file"
+          [ -n "$uses_pin" ] || add "cannot parse the ax-verify.yml uses pin from $workflow_file"
+          [ "${with_axiom:-}" = "${manifest_axiom:-}" ] || add "workflow with.axiom-version ('$with_axiom') != manifest AXIOM_REVISION version ('$manifest_axiom')"
+          [ "${uses_pin:-}" = "${pin_adapter:-}" ] || add "workflow uses pin ('$uses_pin') != manifest execution.adapter_ref ('$pin_adapter')"
+
+          for leg in A B; do
+            rec="${camp}/verify-record-${leg}.json"
+            r_repo="$(jq -r '.subject_repository' "$rec")"
+            r_commit="$(jq -r '.subject_commit' "$rec")"
+            r_axiom="$(jq -r '.axiom_version' "$rec")"
+            r_props="$(jq -r '.proposals_sha256' "$rec")"
+            [ "$r_repo" = "$pin_repo" ] || add "leg ${leg}: subject_repository '$r_repo' != manifest pin '$pin_repo'"
+            [ "$r_commit" = "$pin_commit" ] || add "leg ${leg}: subject_commit '${r_commit:0:12}' != manifest pin '${pin_commit:0:12}'"
+            [ "$r_props" = "$props_sha" ] || add "leg ${leg}: proposals_sha256 '$r_props' != sha256 of the uploaded propositions artifact '$props_sha'"
+            [ "$r_axiom" = "$manifest_axiom" ] || add "leg ${leg}: axiom_version '$r_axiom' != campaign axiom pin '$manifest_axiom'"
+          done
+
+          [ "$(jq -r '.subject_commit' "$recA")" = "$(jq -r '.subject_commit' "$recB")" ] || add "subject_commit differs between legs A and B"
+          [ "$(jq -r '.proposals_sha256' "$recA")" = "$(jq -r '.proposals_sha256' "$recB")" ] || add "proposals_sha256 differs between legs A and B"
+          [ "$(jq -r '.axiom_version' "$recA")" = "$(jq -r '.axiom_version' "$recB")" ] || add "axiom_version differs between legs A and B"
+
+          if [ -n "$violations" ]; then
+            printf '%s' "$violations" >&2
+            jq -cn --arg g "input_mismatch" --arg d "$violations" '{guard:$g,pass:false,detail:$d}' >> "${camp}/guards.jsonl"
+            echo "::error::INPUT_MISMATCH — input-consistency violations (first: $(printf '%s' "$violations" | head -n 1))"
+            exit 1
+          fi
+          jq -cn --arg g "input_mismatch" '{guard:$g,pass:true}' >> "${camp}/guards.jsonl"
+
+      - name: 'Assert DETERMINISM_MISMATCH — canonical digest must be identical across legs'
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          recA="${camp}/verify-record-A.json"
+          recB="${camp}/verify-record-B.json"
+          dA="$(jq -r '.canonical_digest' "$recA")"
+          dB="$(jq -r '.canonical_digest' "$recB")"
+          if [ "$dA" != "$dB" ]; then
+            jq -cn --arg g "determinism_mismatch" --arg d "canonical_digest differs: A='$dA' B='$dB'" '{guard:$g,pass:false,detail:$d}' >> "${camp}/guards.jsonl"
+            echo "::error::DETERMINISM_MISMATCH — canonical_digest differs between legs (A='$dA', B='$dB')"
+            exit 1
+          fi
+          jq -cn --arg g "determinism_mismatch" '{guard:$g,pass:true}' >> "${camp}/guards.jsonl"
+
+      - name: 'Assert VACUOUS_BLOCKED — engine build id + verdict summary must be real'
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          violations=""
+          add() { violations+="$1"$'\n'; }
+          for leg in A B; do
+            rec="${camp}/verify-record-${leg}.json"
+            bid="$(jq -r '.engine_build_id' "$rec")"
+            vs="$(jq -r '.verdict_summary' "$rec")"
+            # verdict_summary is "runOutcome.verdict/gateVerdict/unitVerdict"
+            # (slash-joined). The values "n/a" and "" and any composite whose
+            # run-verdict slot is "n/a" (it starts with "n/a") carry no run
+            # verdict — a run without a verdict is not a verification. String
+            # splitting cannot be used here: the "n/a" sentinel itself
+            # contains the separator.
+            printf '%s' "$bid" | grep -Eq '^[0-9a-fA-F]{64}$' || add "leg ${leg}: engine_build_id is not 64-hex ('$bid')"
+            case "$vs" in
+              ""|"n/a"|n/a/*) add "leg ${leg}: verdict_summary carries no run verdict ('$vs') — a run without a verdict is not a verification" ;;
+            esac
+          done
+          if [ -n "$violations" ]; then
+            printf '%s' "$violations" >&2
+            jq -cn --arg g "vacuous_blocked" --arg d "$violations" '{guard:$g,pass:false,detail:$d}' >> "${camp}/guards.jsonl"
+            echo "::error::VACUOUS_BLOCKED — vacuous run blocked (first: $(printf '%s' "$violations" | head -n 1))"
+            exit 1
+          fi
+          jq -cn --arg g "vacuous_blocked" '{guard:$g,pass:true}' >> "${camp}/guards.jsonl"
+
+      - name: 'Assert ZERO_FOOTPRINT_VIOLATION — subject tree must be untouched'
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          violations=""
+          add() { violations+="$1"$'\n'; }
+          for leg in A B; do
+            rec="${camp}/verify-record-${leg}.json"
+            ok="$(jq -r 'if (.zero_footprint_ok | type) == "boolean" then (.zero_footprint_ok | tostring) else .zero_footprint_ok end' "$rec")"
+            pre="$(jq -r '.pre_tree_hash' "$rec")"
+            post="$(jq -r '.post_tree_hash' "$rec")"
+            [ "$ok" = "true" ] || add "leg ${leg}: zero_footprint_ok is not true ('$ok')"
+            [ "$pre" = "$post" ] || add "leg ${leg}: subject tree hash changed (pre='$pre' post='$post')"
+          done
+          if [ -n "$violations" ]; then
+            printf '%s' "$violations" >&2
+            jq -cn --arg g "zero_footprint_violation" --arg d "$violations" '{guard:$g,pass:false,detail:$d}' >> "${camp}/guards.jsonl"
+            echo "::error::ZERO_FOOTPRINT_VIOLATION — subject tree integrity violated (first: $(printf '%s' "$violations" | head -n 1))"
+            exit 1
+          fi
+          jq -cn --arg g "zero_footprint_violation" '{guard:$g,pass:true}' >> "${camp}/guards.jsonl"
+
+      - name: 'Assert ENVIRONMENT_MISMATCH — runner image + toolchain must match across legs'
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          recA="${camp}/verify-record-A.json"
+          recB="${camp}/verify-record-B.json"
+          violations=""
+          add() { violations+="$1"$'\n'; }
+          riA="$(jq -r '.runner_image' "$recA")"
+          riB="$(jq -r '.runner_image' "$recB")"
+          [ "$riA" = "$riB" ] || add "runner_image differs between legs (A='$riA', B='$riB')"
+          for f in nim z3 lean libpcre3; do
+            vA="$(jq -r --arg f "$f" '.toolchain[$f]' "$recA")"
+            vB="$(jq -r --arg f "$f" '.toolchain[$f]' "$recB")"
+            [ "$vA" = "$vB" ] || add "toolchain.${f} differs between legs (A='$vA', B='$vB')"
+          done
+          if [ -n "$violations" ]; then
+            printf '%s' "$violations" >&2
+            jq -cn --arg g "environment_mismatch" --arg d "$violations" '{guard:$g,pass:false,detail:$d}' >> "${camp}/guards.jsonl"
+            echo "::error::ENVIRONMENT_MISMATCH — verification environments differ (first: $(printf '%s' "$violations" | head -n 1))"
+            exit 1
+          fi
+          jq -cn --arg g "environment_mismatch" '{guard:$g,pass:true}' >> "${camp}/guards.jsonl"
+
+      - name: 'Classify campaign outcome (total, fail-closed — observations only)'
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          evidence="${camp}/campaign-evidence"
+          manifest=".github/axiom-campaigns/campaign-001.json"
+          recA="${camp}/verify-record-A.json"
+          recB="${camp}/verify-record-B.json"
+          guards="${camp}/guards.jsonl"
+          [ -f "$guards" ] || : > "$guards"
+
+          class=""; reason=""
+          if [ ! -f "$recA" ] || [ ! -f "$recB" ]; then
+            class="UNCLASSIFIED"
+            reason="verify-record missing for at least one leg — evidence incomplete (fail-closed)"
+          else
+            total="$(jq -s 'length' "$guards")"
+            failed="$(jq -s '[.[] | select(.pass != true)] | length' "$guards")"
+            exitA="$(jq -r '.prove_exit' "$recA")"
+            exitB="$(jq -r '.prove_exit' "$recB")"
+            digestA="$(jq -r '.canonical_digest' "$recA")"
+            digestB="$(jq -r '.canonical_digest' "$recB")"
+            if [ "$failed" -gt 0 ]; then
+              class="$(jq -sr '[.[] | select(.pass != true)][0].guard' "$guards" | tr '[:lower:]' '[:upper:]')"
+              reason="$(jq -sr '[.[] | select(.pass != true)][0].detail' "$guards" | head -n 1)"
+            elif [ "$total" -ne 5 ]; then
+              class="UNCLASSIFIED"
+              reason="guard results incomplete (${total}/5 evaluated) — fail-closed"
+            elif [ "$exitA" != "$exitB" ]; then
+              class="CONTRADICTION"
+              reason="leg exits differ (A=$exitA, B=$exitB)"
+            else
+              case "$exitA" in
+                0) class="PROVED_REPRODUCIBLE"
+                   reason="exit 0 on both legs; all 5 guards passed; canonical digests equal" ;;
+                1) class="DISPROVED_REPRODUCIBLE"
+                   reason="exit 1 on both legs; all 5 guards passed; canonical digests equal" ;;
+                3) if [ "$digestA" = "$digestB" ]; then
+                     class="REFUSAL_REPRODUCIBLE"
+                     reason="exit 3 on both legs; canonical digests equal; all 5 guards passed"
+                   else
+                     class="CONTRADICTION"
+                     reason="exit 3 on both legs but canonical digests differ"
+                   fi ;;
+                *) class="CONTRADICTION"
+                   reason="out-of-vocabulary exit pair (A=$exitA, B=$exitB) with all guards passing" ;;
+              esac
+            fi
+          fi
+          if [ -z "$class" ]; then
+            class="UNCLASSIFIED"
+            reason="classification fall-through reached — this is a bug in the classification function"
+          fi
+          case "$class" in
+            PROVED_REPRODUCIBLE|DISPROVED_REPRODUCIBLE|REFUSAL_REPRODUCIBLE) accepted="true" ;;
+            *) accepted="false" ;;
+          esac
+
+          jq -n --arg c "$class" --arg r "$reason" --arg a "$accepted" \
+            '{campaign_class:$c, reason:$r, accepted:($a == "true")}' \
+            > "${evidence}/classification.json"
+
+          if [ -f "$recA" ] && [ -f "$recB" ]; then
+            jq -n \
+              --slurpfile manifest "$manifest" \
+              --slurpfile legA "$recA" \
+              --slurpfile legB "$recB" \
+              --slurpfile guards "$guards" \
+              --arg class "$class" --arg reason "$reason" --arg accepted "$accepted" --arg run_url "$RUN_URL" \
+              '{
+                experiment_id: $manifest[0].identifiers.EXPERIMENT_ID,
+                verification_scope: $manifest[0].identifiers.VERIFICATION_SCOPE,
+                subject: {repository: $manifest[0].identifiers.PROJECT_UNDER_TEST,
+                          commit: $manifest[0].identifiers.PROJECT_REVISION},
+                axiom_revision: $manifest[0].identifiers.AXIOM_REVISION,
+                adapter_ref: $manifest[0].execution.adapter_ref,
+                campaign_class: $class,
+                reason: $reason,
+                accepted: ($accepted == "true"),
+                legs: {
+                  A: {prove_exit: $legA[0].prove_exit,
+                      canonical_digest: $legA[0].canonical_digest,
+                      engine_build_id: $legA[0].engine_build_id,
+                      verdict_summary: $legA[0].verdict_summary,
+                      zero_footprint_ok: $legA[0].zero_footprint_ok,
+                      runner_image: $legA[0].runner_image,
+                      toolchain: $legA[0].toolchain},
+                  B: {prove_exit: $legB[0].prove_exit,
+                      canonical_digest: $legB[0].canonical_digest,
+                      engine_build_id: $legB[0].engine_build_id,
+                      verdict_summary: $legB[0].verdict_summary,
+                      zero_footprint_ok: $legB[0].zero_footprint_ok,
+                      runner_image: $legB[0].runner_image,
+                      toolchain: $legB[0].toolchain}
+                },
+                guards: $guards,
+                run_url: $run_url
+              }' > "${evidence}/comparison-report.json"
+          else
+            jq -n --arg class "$class" --arg reason "$reason" --arg run_url "$RUN_URL" \
+              '{campaign_class:$class, reason:$reason, accepted:false, legs:null,
+                guards:null, run_url:$run_url, error:"verify-record incomplete"}' \
+              > "${evidence}/comparison-report.json"
+          fi
+          [ -f "$guards" ] && cp "$guards" "${evidence}/guards.jsonl"
+          [ -f "${camp}/propositions/proposals.json" ] && \
+            cp "${camp}/propositions/proposals.json" "${evidence}/proposals.json"
+
+          digestA_disp="$(jq -r '.legs.A.canonical_digest // "(missing)"' "${evidence}/comparison-report.json")"
+          digestB_disp="$(jq -r '.legs.B.canonical_digest // "(missing)"' "${evidence}/comparison-report.json")"
+          zfA_disp="$(jq -r '.legs.A.zero_footprint_ok // "(missing)"' "${evidence}/comparison-report.json")"
+          zfB_disp="$(jq -r '.legs.B.zero_footprint_ok // "(missing)"' "${evidence}/comparison-report.json")"
+          ri_disp="$(jq -r '.legs.A.runner_image // "(missing)"' "${evidence}/comparison-report.json")"
+          {
+            echo "## Axiom external verification campaign — classification"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| EXPERIMENT_ID | $(jq -r '.identifiers.EXPERIMENT_ID' "$manifest") |"
+            echo "| subject | $(jq -r '.identifiers.PROJECT_UNDER_TEST' "$manifest") @ \`$(jq -r '.identifiers.PROJECT_REVISION' "$manifest")\` |"
+            echo "| verification scope | $(jq -r '.identifiers.VERIFICATION_SCOPE' "$manifest") |"
+            echo "| canonical digest A | \`${digestA_disp}\` |"
+            echo "| canonical digest B | \`${digestB_disp}\` |"
+            echo "| classification | **${class}** |"
+            echo "| accepted (green) | ${accepted} |"
+            echo "| zero-footprint (A / B) | ${zfA_disp} / ${zfB_disp} |"
+            echo "| runner image | \`${ri_disp}\` |"
+            echo "| run | ${RUN_URL} |"
+            echo ""
+            echo "Reason: ${reason}"
+            echo ""
+            echo "Evidence artifact: \`campaign-evidence\` (verify-records A/B, comparison report, manifest, classification)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Upload campaign evidence (verify-records · report · manifest · classification)'
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: 'campaign-evidence'
+          path: '${{ runner.temp }}/campaign/campaign-evidence/'
+          if-no-files-found: error
+
+      - name: 'Gate — accept only reproducible verdict classes (fail-closed)'
+        if: always()
+        run: |
+          set -euo pipefail
+          report="${RUNNER_TEMP}/campaign/campaign-evidence/comparison-report.json"
+          if [ ! -f "$report" ]; then
+            echo "::error::campaign classification report missing — the campaign is not accounted (fail-closed)"
+            exit 1
+          fi
+          class="$(jq -r '.campaign_class // "UNCLASSIFIED"' "$report")"
+          case "$class" in
+            PROVED_REPRODUCIBLE|DISPROVED_REPRODUCIBLE|REFUSAL_REPRODUCIBLE)
+              echo "campaign class: $class — accepted (reproducible verdict)"
+              exit 0 ;;
+            *)
+              echo "::error::campaign class '$class' — not an accepted class (PROVED_REPRODUCIBLE / DISPROVED_REPRODUCIBLE / REFUSAL_REPRODUCIBLE only); fail-closed"
+              exit 1 ;;
+          esac
