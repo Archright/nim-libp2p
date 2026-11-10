@@ -16,7 +16,7 @@
 # otherwise the engine rejects the document (SUBJECT_MISMATCH, exit 3).
 #
 # Lanes: job "exec" calls the external bundle-consumer adapter — the
-# Archright/axiom-cli reusable workflow ax-verify.yml (axiom v0.6.0 release
+# Archright/axiom-cli reusable workflow ax-verify.yml (axiom v0.6.1 release
 # binary; no source build, no secrets, public repos only) — twice via a
 # matrix (legs A and B, fail-fast disabled so both legs always produce
 # evidence). Each leg uploads a verify-record.json evidence artifact.
@@ -217,7 +217,7 @@ jobs:
       contents: read
     uses: Archright/axiom-cli/.github/workflows/ax-verify.yml@156140d3f9613d40c422d452d432de017229f5f9
     with:
-      axiom-version: '0.6.0'
+      axiom-version: '0.6.1'
       subject-repository: 'iftech/nim-libp2p'
       subject-commit: 'a130a7f32219909bdcda14b7f1e64d0804fc832c'
       proposals-artifact: 'propositions'
