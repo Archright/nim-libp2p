@@ -10,7 +10,7 @@
   },
   "execution": {
     "customer_repository": "Archright/nim-libp2p",
-    "adapter_ref": "78356738f9dd5a198e376bac8857dac37fc73f65",
+    "adapter_ref": "4ca1892a69abcdb9036ec8a69d7bcedc940507d1",
     "legs": [
       "A",
       "B"
