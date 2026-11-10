@@ -2,7 +2,7 @@
   "identifiers": {
     "PROJECT_UNDER_TEST": "iftech/nim-libp2p",
     "PROJECT_REVISION": "a130a7f32219909bdcda14b7f1e64d0804fc832c",
-    "AXIOM_REVISION": "v0.6.0 (Archright/axiom-cli release; manifest.json 정본)",
+    "AXIOM_REVISION": "v0.6.1 (Archright/axiom-cli release; manifest.json 정본)",
     "AXIOM_CONFIGURATION": "external-subject bundle-consumer campaign lane (ax-verify adapter, dry-run, AXIOM_PROVE_WORKERS=1)",
     "TOOLCHAIN_IDENTITY": "Nim 2.2.10 / Z3 4.13.3 / Lean 4.33.0 (direct pinned downloads, choosenim-free)",
     "VERIFICATION_SCOPE": "SPEC-LIBP2P-BV-SLICE",
