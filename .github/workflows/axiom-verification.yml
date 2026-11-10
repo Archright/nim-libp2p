@@ -215,7 +215,7 @@ jobs:
         leg: [A, B]
     permissions:
       contents: read
-    uses: Archright/axiom-cli/.github/workflows/ax-verify.yml@16273cf5ba6d5d081662b0b02e0b4327d1d48889
+    uses: Archright/axiom-cli/.github/workflows/ax-verify.yml@78356738f9dd5a198e376bac8857dac37fc73f65
     with:
       axiom-version: '0.6.1'
       subject-repository: 'iftech/nim-libp2p'
