@@ -7,16 +7,19 @@
 # value against the manifest as the canonical source.
 #
 # Propositions provenance: the pinned SPEC-LIBP2P-BV-SLICE bytesview
-# document is reused VERBATIM from this repository's commit cfed3871
+# document descends from this repository's commit cfed3871
 # (.github/workflows/byo-agent-verify.yml, dispatch mode "main" — emitted by
 # a real LLM in the 2026-11-02 E2E; the workflow file was later reverted,
-# but the pinned document is the canonical bytesview slice). The content is
-# transcribed unmodified: the document's subject identity
-# (iftech/nim-libp2p @ a130a7f3…) must stay identical to the campaign pin,
-# otherwise the engine rejects the document (SUBJECT_MISMATCH, exit 3).
+# but the pinned document is the canonical bytesview slice), migrated to the
+# engine's BYO propositions schema v2 on 2026-11-10 (schema_version 2 +
+# unique per-proposition id "bytesview-toOpenArray-bv-slice" — semantics
+# unchanged: same subject, specId, target, source location). The document's
+# subject identity (iftech/nim-libp2p @ a130a7f3…) must stay identical to
+# the campaign pin, otherwise the engine rejects the document
+# (SUBJECT_MISMATCH, exit 3).
 #
 # Lanes: job "exec" calls the external bundle-consumer adapter — the
-# Archright/axiom-cli reusable workflow ax-verify.yml (axiom v0.6.1 release
+# Archright/axiom-cli reusable workflow ax-verify.yml (axiom v0.6.3 release
 # binary; no source build, no secrets, public repos only) — twice via a
 # matrix (legs A and B, fail-fast disabled so both legs always produce
 # evidence). Each leg uploads a verify-record.json evidence artifact.
@@ -147,7 +150,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   propositions:
-    name: 'Job 2 — propositions: pinned SPEC-LIBP2P-BV-SLICE document (cfed3871 verbatim)'
+    name: 'Job 2 — propositions: pinned SPEC-LIBP2P-BV-SLICE document (BYO schema v2)'
     needs: campaign-manifest
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -156,7 +159,7 @@ jobs:
     outputs:
       proposals_sha256: ${{ steps.emit.outputs.proposals_sha256 }}
     steps:
-      - name: 'Emit pinned propositions document (verbatim from cfed3871)'
+      - name: 'Emit pinned propositions document (BYO schema v2, cfed3871 lineage)'
         id: emit
         env:
           WANT_SUBJECT_REPOSITORY: ${{ needs.campaign-manifest.outputs.subject_repository }}
@@ -164,14 +167,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/campaign/propositions"
-          # VERBATIM reuse — do not edit this document. Source: this repository,
-          # commit cfed3871, .github/workflows/byo-agent-verify.yml, dispatch
-          # mode "main" (the pinned bytesview proposition, LLM-authored in the
-          # 2026-11-02 E2E). The subject identity below must equal the campaign
-          # pins — the engine rejects disagreeing documents (SUBJECT_MISMATCH,
-          # exit 3).
+          # BYO propositions schema v2 (engine intake contract: schema_version
+          # must be 2 + each proposition carries a unique id). Lineage: this
+          # repository, commit cfed3871, .github/workflows/byo-agent-verify.yml,
+          # dispatch mode "main" (the pinned bytesview proposition, LLM-authored
+          # in the 2026-11-02 E2E), migrated 2026-11-10 to v2 — id added,
+          # semantics unchanged. The subject identity below must equal the
+          # campaign pins — the engine rejects disagreeing documents
+          # (SUBJECT_MISMATCH, exit 3).
           cat > "${RUNNER_TEMP}/campaign/propositions/proposals.json" <<'JSON'
-          {"schema_version":1,"subject":{"repository":"iftech/nim-libp2p","commit":"a130a7f32219909bdcda14b7f1e64d0804fc832c"},"agent":{"id":"phase3-selftest-agent","version":"1.0"},"propositions":[{"specId":"SPEC-LIBP2P-BV-SLICE","target":"libp2p/utils/bytesview.nim::toOpenArray","source_location":{"file":"libp2p/utils/bytesview.nim","line":18},"explanation":"Phase 4 fork deployment — pinned BYO proposition (LLM-authored, 2026-11-02 E2E)"}]}
+          {"schema_version":2,"subject":{"repository":"iftech/nim-libp2p","commit":"a130a7f32219909bdcda14b7f1e64d0804fc832c"},"agent":{"id":"phase3-selftest-agent","version":"1.0"},"propositions":[{"id":"bytesview-toOpenArray-bv-slice","specId":"SPEC-LIBP2P-BV-SLICE","target":"libp2p/utils/bytesview.nim::toOpenArray","source_location":{"file":"libp2p/utils/bytesview.nim","line":18},"explanation":"Phase 4 fork deployment — pinned BYO proposition (LLM-authored, 2026-11-02 E2E; schema v2 migration 2026-11-10: id added, semantics unchanged)"}]}
           JSON
           python3 -m json.tool "${RUNNER_TEMP}/campaign/propositions/proposals.json" >/dev/null
 
@@ -181,7 +186,7 @@ jobs:
           doc_repo="$(jq -r '.subject.repository' "${RUNNER_TEMP}/campaign/propositions/proposals.json")"
           doc_commit="$(jq -r '.subject.commit' "${RUNNER_TEMP}/campaign/propositions/proposals.json")"
           if [ "$doc_repo" != "$WANT_SUBJECT_REPOSITORY" ] || [ "$doc_commit" != "$WANT_SUBJECT_COMMIT" ]; then
-            echo "::error::propositions subject identity drift: document says '$doc_repo@${doc_commit:0:12}', campaign pins '$WANT_SUBJECT_REPOSITORY@${WANT_SUBJECT_COMMIT:0:12}' — the cfed3871 verbatim reuse is broken"
+            echo "::error::propositions subject identity drift: document says '$doc_repo@${doc_commit:0:12}', campaign pins '$WANT_SUBJECT_REPOSITORY@${WANT_SUBJECT_COMMIT:0:12}' — the pinned v2 document drifted"
             exit 1
           fi
 
@@ -192,7 +197,7 @@ jobs:
             echo ""
             echo "| field | value |"
             echo "|---|---|"
-            echo "| document | SPEC-LIBP2P-BV-SLICE pinned bytesview proposition (cfed3871, verbatim) |"
+            echo "| document | SPEC-LIBP2P-BV-SLICE pinned bytesview proposition (BYO schema v2; cfed3871 lineage) |"
             echo "| subject | $doc_repo @ \`$doc_commit\` |"
             echo "| propositions | $(jq -r '.propositions | length' "${RUNNER_TEMP}/campaign/propositions/proposals.json") |"
             echo "| sha256 | \`$sha\` |"
@@ -215,9 +220,9 @@ jobs:
         leg: [A, B]
     permissions:
       contents: read
-    uses: Archright/axiom-cli/.github/workflows/ax-verify.yml@78356738f9dd5a198e376bac8857dac37fc73f65
+    uses: Archright/axiom-cli/.github/workflows/ax-verify.yml@4ca1892a69abcdb9036ec8a69d7bcedc940507d1
     with:
-      axiom-version: '0.6.1'
+      axiom-version: '0.6.3'
       subject-repository: 'iftech/nim-libp2p'
       subject-commit: 'a130a7f32219909bdcda14b7f1e64d0804fc832c'
       proposals-artifact: 'propositions'
