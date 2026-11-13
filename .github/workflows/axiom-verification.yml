@@ -6,30 +6,64 @@
 # re-declares the pins inline — job "compare" cross-checks every observed
 # value against the manifest as the canonical source.
 #
-# Propositions provenance: the pinned SPEC-LIBP2P-BV-SLICE bytesview
-# document descends from this repository's commit cfed3871
-# (.github/workflows/byo-agent-verify.yml, dispatch mode "main" — emitted by
-# a real LLM in the 2026-11-02 E2E; the workflow file was later reverted,
-# but the pinned document is the canonical bytesview slice), migrated to the
-# engine's BYO propositions schema v2 on 2026-11-10 (schema_version 2 +
-# unique per-proposition id "bytesview-toOpenArray-bv-slice" — semantics
-# unchanged: same subject, specId, target, source location). The document's
-# subject identity (iftech/nim-libp2p @ a130a7f3…) must stay identical to
-# the campaign pin, otherwise the engine rejects the document
-# (SUBJECT_MISMATCH, exit 3).
+# Propositions (job "propositions", dispatch input propositions_mode):
+#   live (default) — a real BYO AI agent run, zero secrets by default:
+#     · the axiom v0.6.3 release bundle (SHA256SUMS + manifest binding)
+#       supplies the authoritative capability catalog (`ax capability
+#       --json`: SPEC-LIBP2P-BV-SLICE EQUIPPED, SPEC-LIBP2P-VARINT-RT
+#       NOT_EQUIPPED);
+#     · the subject source (iftech/nim-libp2p @ the campaign pin, checked
+#       out read-only into subject-ro) is read as DATA ONLY — subject build
+#       scripts and code are never executed;
+#     · default runner: llama.cpp b12340 Ubuntu x64 release binary
+#       (sha256-pinned, MIT) + Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF
+#       q4_k_m (sha256-pinned, Apache-2.0), grammar-constrained by a PURE
+#       STRUCTURAL schema-v2 GBNF (no hardcoded specId, target or subject —
+#       the agent's values come from the prompt data alone);
+#     · when the AGENT_API_KEY secret is set, an OpenAI-compatible
+#       chat-completions endpoint is used instead (AGENT_API_BASE_URL /
+#       AGENT_API_MODEL repo variables override the endpoint);
+#     · the generated document is extracted with
+#       json.JSONDecoder().raw_decode and must pass Input Admission — 100%
+#       parity with the engine intake (src/cli/proposition_intake.nim:
+#       262144-byte bound, schema_version==2 envelope, unique id <=128,
+#       lane XOR claim form, optional source_location/explanation shape,
+#       subject pin cross-check, single distinct target) plus one stricter
+#       pre-leg rule: at least one proposition must reference an EQUIPPED
+#       specId matching VERIFICATION_SCOPE;
+#     · agent-provenance.json (mode, runner, binary/model id+sha256+
+#       license, prompt/subject/source/catalog/proposals sha256, elapsed,
+#       admission summary) + agent-prompt.txt + the capability snapshot are
+#       bound as the "agent-provenance" artifact — the non-deterministic
+#       AI discovery half of the campaign record.
+#   pinned — regression fixture: the byte-stable v2 document (proposals
+#   sha256 beca3b0c…; lineage: this repository's commit cfed3871,
+#   .github/workflows/byo-agent-verify.yml, dispatch mode "main" — emitted
+#   by a real LLM in the 2026-11-02 E2E; v2 migration 2026-11-10 added the
+#   per-proposition id, semantics unchanged) used by campaign-001 legs
+#   before the live agent existed.
+#   In both modes the document's subject identity must equal the campaign
+#   pins, otherwise the engine rejects it (SUBJECT_MISMATCH, exit 3).
 #
 # Lanes: job "exec" calls the external bundle-consumer adapter — the
 # Archright/axiom-cli reusable workflow ax-verify.yml (axiom v0.6.3 release
 # binary; no source build, no secrets, public repos only) — twice via a
 # matrix (legs A and B, fail-fast disabled so both legs always produce
-# evidence). Each leg uploads a verify-record.json evidence artifact.
+# evidence). Each leg uploads a verify-record.json evidence artifact. The
+# "propositions" artifact carries exactly one file at its root,
+# proposals.json — the adapter's proposals-path default — and nothing else.
 #
 # Authority: job "compare" is the campaign authority. Every assertion is a
 # real comparison with a real exit code (no swallowed failures); the
 # campaign classification is derived from the observed records only —
 # fail-closed. Acceptance (green) classes: PROVED_REPRODUCIBLE,
 # DISPROVED_REPRODUCIBLE, REFUSAL_REPRODUCIBLE only. Guard violations,
-# CONTRADICTION and UNCLASSIFIED all exit 1.
+# CONTRADICTION and UNCLASSIFIED all exit 1. compare additionally stages
+# the Job-2 agent provenance and the leg-A proof state (display.propositions[]
+# 2-axis capability rollup) into the campaign-evidence artifact, blocks
+# vacuous digest equality (both canonical digests must be real 64-hex) and
+# vacuous verdicts (an n/a unit-verdict slot — e.g. an all-INCAPABLE run —
+# is not a verification).
 #
 # compare runs with `if: always()`: a `uses` job cannot carry
 # continue-on-error (probe-verified — GitHub rejects the combination at
@@ -44,13 +78,23 @@
 #
 # Dispatch: manual (workflow_dispatch) from the default branch; no
 # schedule. Evidence: "campaign-evidence" artifact (both verify-records,
-# comparison report, manifest copy, classification) + the job step
-# summaries.
+# leg-A proof state, agent provenance, propositions, comparison report,
+# manifest, classification) + the job step summaries, plus the
+# "agent-provenance" artifact at the Job-2 boundary.
 
 name: 'Axiom external verification campaign'
 
 on:
   workflow_dispatch:
+    inputs:
+      propositions_mode:
+        description: 'Proposition generation mode: live (run BYO AI agent) or pinned (regression fixture)'
+        required: false
+        default: 'live'
+        type: choice
+        options:
+          - live
+          - pinned
 
 jobs:
   campaign-manifest:
@@ -150,65 +194,711 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   propositions:
-    name: 'Job 2 — propositions: pinned SPEC-LIBP2P-BV-SLICE document (BYO schema v2)'
+    name: 'Job 2 — propositions: live BYO AI agent (schema v2) + Input Admission'
     needs: campaign-manifest
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      WANT_SUBJECT_REPOSITORY: ${{ needs.campaign-manifest.outputs.subject_repository }}
+      WANT_SUBJECT_COMMIT: ${{ needs.campaign-manifest.outputs.subject_commit }}
+      WANT_VERIFICATION_SCOPE: ${{ needs.campaign-manifest.outputs.verification_scope }}
+      PROPOSITIONS_MODE: ${{ inputs.propositions_mode }}
+      AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
+      AGENT_API_BASE_URL: ${{ vars.AGENT_API_BASE_URL }}
+      AGENT_API_MODEL: ${{ vars.AGENT_API_MODEL }}
+      AXIOM_VERSION_TAG: 'v0.6.3'
+      AXIOM_VERSION_PLAIN: '0.6.3'
     outputs:
       proposals_sha256: ${{ steps.emit.outputs.proposals_sha256 }}
     steps:
-      - name: 'Emit pinned propositions document (BYO schema v2, cfed3871 lineage)'
-        id: emit
-        env:
-          WANT_SUBJECT_REPOSITORY: ${{ needs.campaign-manifest.outputs.subject_repository }}
-          WANT_SUBJECT_COMMIT: ${{ needs.campaign-manifest.outputs.subject_commit }}
+      - name: 'Acquire axiom v0.6.3 release bundle (SHA256SUMS + manifest binding) + query the capability catalog'
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/campaign/propositions"
-          # BYO propositions schema v2 (engine intake contract: schema_version
-          # must be 2 + each proposition carries a unique id). Lineage: this
-          # repository, commit cfed3871, .github/workflows/byo-agent-verify.yml,
-          # dispatch mode "main" (the pinned bytesview proposition, LLM-authored
-          # in the 2026-11-02 E2E), migrated 2026-11-10 to v2 — id added,
-          # semantics unchanged. The subject identity below must equal the
-          # campaign pins — the engine rejects disagreeing documents
-          # (SUBJECT_MISMATCH, exit 3).
-          cat > "${RUNNER_TEMP}/campaign/propositions/proposals.json" <<'JSON'
-          {"schema_version":2,"subject":{"repository":"iftech/nim-libp2p","commit":"a130a7f32219909bdcda14b7f1e64d0804fc832c"},"agent":{"id":"phase3-selftest-agent","version":"1.0"},"propositions":[{"id":"bytesview-toOpenArray-bv-slice","specId":"SPEC-LIBP2P-BV-SLICE","target":"libp2p/utils/bytesview.nim::toOpenArray","source_location":{"file":"libp2p/utils/bytesview.nim","line":18},"explanation":"Phase 4 fork deployment — pinned BYO proposition (LLM-authored, 2026-11-02 E2E; schema v2 migration 2026-11-10: id added, semantics unchanged)"}]}
-          JSON
-          python3 -m json.tool "${RUNNER_TEMP}/campaign/propositions/proposals.json" >/dev/null
-
-          # Pre-flight integrity check: the emitted document's subject identity
-          # must equal the manifest pins (guards transcription drift before two
-          # adapter legs are spent).
-          doc_repo="$(jq -r '.subject.repository' "${RUNNER_TEMP}/campaign/propositions/proposals.json")"
-          doc_commit="$(jq -r '.subject.commit' "${RUNNER_TEMP}/campaign/propositions/proposals.json")"
-          if [ "$doc_repo" != "$WANT_SUBJECT_REPOSITORY" ] || [ "$doc_commit" != "$WANT_SUBJECT_COMMIT" ]; then
-            echo "::error::propositions subject identity drift: document says '$doc_repo@${doc_commit:0:12}', campaign pins '$WANT_SUBJECT_REPOSITORY@${WANT_SUBJECT_COMMIT:0:12}' — the pinned v2 document drifted"
-            exit 1
+          fail() { echo "::error::capability: $1" >&2; exit 1; }
+          work="${RUNNER_TEMP}/ax-bundle-acquire"
+          camp="${RUNNER_TEMP}/campaign"
+          mkdir -p "$work" "${camp}/propositions" "${camp}/agent-provenance" "${camp}/agent-work"
+          # libpcre3 first: ax loads libpcre.so.3 at startup and the bare
+          # runner image may omit it (same recipe as the ax-verify adapter).
+          if ! ldconfig -p 2>/dev/null | grep -q 'libpcre\.so'; then
+            sudo apt-get -o DPkg::Lock::Timeout=300 update -qq \
+              && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libpcre3
           fi
-
-          sha="$(sha256sum "${RUNNER_TEMP}/campaign/propositions/proposals.json" | cut -d' ' -f1)"
-          echo "proposals_sha256=$sha" >> "$GITHUB_OUTPUT"
+          ldconfig -p | grep 'libpcre\.so\.3' >/dev/null \
+            || fail 'libpcre.so.3 absent after install'
+          command -v jq >/dev/null 2>&1 || fail 'jq unavailable'
+          rel_base="https://github.com/Archright/axiom-cli/releases/download/${AXIOM_VERSION_TAG}"
+          for asset in axiom-bundle-v0.6.3-linux-x86_64.tar.gz manifest.json SHA256SUMS; do
+            curl -sSfL --retry 4 --retry-all-errors --retry-delay 2 \
+              --connect-timeout 3 --max-time 600 "$rel_base/$asset" -o "$work/$asset" \
+              || fail "release asset download failed: $asset"
+          done
+          (cd "$work" && sha256sum -c SHA256SUMS) || fail 'SHA256SUMS verification failed'
+          mkdir -p "${RUNNER_TEMP}/ax-bundle-ro"
+          tar -xzf "$work/axiom-bundle-v0.6.3-linux-x86_64.tar.gz" -C "${RUNNER_TEMP}/ax-bundle-ro" \
+            || fail 'tar extraction failed'
+          anchor_count="$(find "${RUNNER_TEMP}/ax-bundle-ro" -name '.axiom_root' | wc -l)"
+          [ "$anchor_count" -eq 1 ] \
+            || fail "expected exactly one .axiom_root anchor in the bundle, found $anchor_count"
+          BUNDLE_ROOT="$(dirname "$(find "${RUNNER_TEMP}/ax-bundle-ro" -name '.axiom_root' -type f | head -1)")"
+          [ -f "$BUNDLE_ROOT/ax" ] || fail "ax binary missing at the bundle root ($BUNDLE_ROOT)"
+          bundle_sha="$(sha256sum "$work/axiom-bundle-v0.6.3-linux-x86_64.tar.gz" | cut -d' ' -f1)"
+          bin_sha="$(sha256sum "$BUNDLE_ROOT/ax" | cut -d' ' -f1)"
+          m="$work/manifest.json"
+          jq -e --arg sv 'axiom.release-bundle.manifest.v1' '.schemaVersion == $sv' "$m" >/dev/null \
+            || fail 'manifest schemaVersion is not axiom.release-bundle.manifest.v1'
+          jq -e --arg p 'linux-x86_64' '.platform == $p' "$m" >/dev/null \
+            || fail 'manifest platform is not linux-x86_64'
+          jq -e --arg t "$AXIOM_VERSION_TAG" '.tag == $t' "$m" >/dev/null \
+            || fail "manifest tag != $AXIOM_VERSION_TAG"
+          jq -e --arg v "$AXIOM_VERSION_PLAIN" '.version == $v' "$m" >/dev/null \
+            || fail "manifest version != $AXIOM_VERSION_PLAIN"
+          jq -e --arg bt 'axiom-bundle-v0.6.3-linux-x86_64.tar.gz' '.bundlePath == $bt' "$m" >/dev/null \
+            || fail 'manifest bundlePath does not match the downloaded asset name'
+          jq -e --arg bs "$bundle_sha" '.bundleSha256 == $bs' "$m" >/dev/null \
+            || fail "manifest bundleSha256 != observed sha256 ($bundle_sha)"
+          jq -e --arg ns "$bin_sha" '.binarySha256 == $ns' "$m" >/dev/null \
+            || fail "manifest binarySha256 != observed ax sha256 ($bin_sha)"
+          version_out="$(cd "$BUNDLE_ROOT" && AXIOM_ROOT="$BUNDLE_ROOT" ./ax --version)" \
+            || fail 'ax --version execution failed at the bundle root'
+          version_out="$(printf '%s\n' "$version_out" | head -1 | tr -d '[:space:]')"
+          [ "$version_out" = "$AXIOM_VERSION_TAG" ] \
+            || fail "ax --version '$version_out' != $AXIOM_VERSION_TAG"
+          # The authoritative capability catalog — the lane universe the
+          # agent is allowed to reference, and the admission gate's source.
+          cap_file="${camp}/agent-provenance/ax_capability.json"
+          (cd "$BUNDLE_ROOT" && AXIOM_ROOT="$BUNDLE_ROOT" ./ax capability --json) > "$cap_file" \
+            || fail 'ax capability --json failed'
+          jq -e --arg av "$AXIOM_VERSION_TAG" '.axiomVersion == $av' "$cap_file" >/dev/null \
+            || fail "capability catalog axiomVersion != $AXIOM_VERSION_TAG"
+          scope_status="$(jq -r --arg s "$WANT_VERIFICATION_SCOPE" \
+            '.capabilities[] | select(.specId == $s) | .status' "$cap_file")"
+          [ "$scope_status" = "EQUIPPED" ] \
+            || fail "WANT_VERIFICATION_SCOPE '$WANT_VERIFICATION_SCOPE' is not EQUIPPED in the capability catalog (status '$scope_status')"
+          varint_status="$(jq -r \
+            '.capabilities[] | select(.specId == "SPEC-LIBP2P-VARINT-RT") | .status' "$cap_file")"
+          [ "$varint_status" = "NOT_EQUIPPED" ] \
+            || fail "SPEC-LIBP2P-VARINT-RT is not NOT_EQUIPPED in the capability catalog (status '$varint_status')"
+          scope_rel="$(jq -r --arg s "$WANT_VERIFICATION_SCOPE" \
+            '.capabilities[] | select(.specId == $s) | .specRelPath' "$cap_file")"
+          [ -n "$scope_rel" ] || fail 'specRelPath missing for the scope specId'
+          scope_spec="$BUNDLE_ROOT/config/spec/$scope_rel"
+          [ -f "$scope_spec" ] || fail "spec catalog document missing in the bundle: config/spec/$scope_rel"
+          varint_spec="$BUNDLE_ROOT/config/spec/nim_libp2p_varint_roundtrip.json"
+          [ -f "$varint_spec" ] \
+            || fail 'spec catalog document missing in the bundle: config/spec/nim_libp2p_varint_roundtrip.json'
           {
-            echo "## Propositions artifact"
+            echo "AXIOM_BUNDLE_ROOT=$BUNDLE_ROOT"
+            echo "SCOPE_SPEC_FILE=$scope_spec"
+            echo "SCOPE_SPEC_REL=$scope_rel"
+            echo "VARINT_SPEC_FILE=$varint_spec"
+          } >> "$GITHUB_ENV"
+          cap_sha="$(sha256sum "$cap_file" | cut -d' ' -f1)"
+          echo "capability: OK — catalog $AXIOM_VERSION_TAG; $WANT_VERIFICATION_SCOPE EQUIPPED (specRelPath $scope_rel); SPEC-LIBP2P-VARINT-RT NOT_EQUIPPED; catalog sha256 $cap_sha"
+          {
+            echo "## Job 2 — axiom capability catalog (authoritative lane universe)"
             echo ""
             echo "| field | value |"
             echo "|---|---|"
-            echo "| document | SPEC-LIBP2P-BV-SLICE pinned bytesview proposition (BYO schema v2; cfed3871 lineage) |"
-            echo "| subject | $doc_repo @ \`$doc_commit\` |"
-            echo "| propositions | $(jq -r '.propositions | length' "${RUNNER_TEMP}/campaign/propositions/proposals.json") |"
-            echo "| sha256 | \`$sha\` |"
-            echo "| artifact | \`propositions\` |"
+            echo "| axiom version | $version_out (bundle sha256 \`${bundle_sha}\`) |"
+            echo "| scope specId | $WANT_VERIFICATION_SCOPE — **EQUIPPED** (specRelPath \`$scope_rel\`) |"
+            echo "| SPEC-LIBP2P-VARINT-RT | NOT_EQUIPPED (contrast lane — not usable by the agent) |"
+            echo "| catalog sha256 | \`${cap_sha}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 'Upload propositions artifact (Job-2 boundary — data only)'
+      - name: 'Checkout subject repository into subject-ro (data source ONLY — never executed)'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.campaign-manifest.outputs.subject_repository }}
+          ref: ${{ needs.campaign-manifest.outputs.subject_commit }}
+          path: subject-ro
+          persist-credentials: false
+
+      - name: 'Stage subject source data (spec-catalog blob pin cross-check)'
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::subject: $1" >&2; exit 1; }
+          camp="${RUNNER_TEMP}/campaign"
+          head="$(git -C subject-ro rev-parse HEAD)"
+          [ "$head" = "$WANT_SUBJECT_COMMIT" ] \
+            || fail "subject-ro HEAD '$head' != campaign pin '$WANT_SUBJECT_COMMIT'"
+          module="$(jq -r '.subject.module' "$SCOPE_SPEC_FILE")"
+          [ -n "$module" ] || fail 'spec catalog document carries no subject.module'
+          src="subject-ro/${module}"
+          [ -f "$src" ] || fail "subject module missing in the read-only checkout: $module"
+          src_sha="$(sha256sum "$src" | cut -d' ' -f1)"
+          blob_pin="$(jq -r '.subject.blobSha256' "$SCOPE_SPEC_FILE")"
+          [ -n "$blob_pin" ] || fail 'spec catalog document carries no subject.blobSha256 pin'
+          [ "$src_sha" = "$blob_pin" ] \
+            || fail "subject $module sha256 '$src_sha' != spec catalog pin '$blob_pin' (subject bytes drift)"
+          cp "$src" "${camp}/agent-work/subject_source.nim"
+          {
+            echo "SUBJECT_MODULE=$module"
+            echo "SUBJECT_SOURCE_FILE=${camp}/agent-work/subject_source.nim"
+            echo "SOURCE_FILE_SHA256=$src_sha"
+          } >> "$GITHUB_ENV"
+          echo "subject: $WANT_SUBJECT_REPOSITORY @ $head — $module read as data only (blob sha256 $src_sha == spec pin)"
+          {
+            echo "## Job 2 — subject source data (read-only, never executed)"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| subject | $WANT_SUBJECT_REPOSITORY @ \`$head\` |"
+            echo "| module | \`$module\` |"
+            echo "| blob sha256 | \`${src_sha}\` (== spec catalog pin) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Run BYO AI agent (live: external API or pinned-sha llama.cpp + open weights; pinned: regression fixture)'
+        id: emit
+        env:
+          LLAMA_TARBALL_URL: 'https://github.com/ggml-org/llama.cpp/releases/download/b12340/llama-b12340-bin-ubuntu-x64.tar.gz'
+          LLAMA_TARBALL_SHA256: '5bc0276548147e56aa03f97b201b1cb3b43cbda6e388f1f2f4c8d82b56313856'
+          MODEL_URL: 'https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf'
+          MODEL_SHA256: 'cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046'
+          MODEL_ID: 'Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF:qwen2.5-coder-1.5b-instruct-q4_k_m.gguf'
+          MODEL_LICENSE: 'Apache-2.0'
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::agent: $1" >&2; exit 1; }
+          camp="${RUNNER_TEMP}/campaign"
+          work="${camp}/agent-work"
+          prov_dir="${camp}/agent-provenance"
+          prop_dir="${camp}/propositions"
+          start_ts="$(date +%s)"
+
+          # Grammar-constrained extraction: the generated document is a
+          # single JSON object; raw_decode parses it from the agent output
+          # (llama conversation transcript or API message content).
+          cat > "${work}/extract_json.py" <<'PYEOF'
+          import json
+          import sys
+
+          def main():
+              if len(sys.argv) != 3:
+                  print("usage: extract_json.py <agent-output> <output.json>",
+                        file=sys.stderr)
+                  return 2
+              with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as f:
+                  raw = f.read()
+              # llama-completion conversation transcripts echo the whole
+              # chat; the generation follows the final 'assistant' marker.
+              marker = "\nassistant\n"
+              idx = raw.rfind(marker)
+              segment = raw[idx + len(marker):] if idx != -1 else raw
+              decoder = json.JSONDecoder()
+              pos = segment.find("{")
+              obj = None
+              while pos != -1:
+                  try:
+                      obj, _end = decoder.raw_decode(segment, pos)
+                      break
+                  except ValueError:
+                      pos = segment.find("{", pos + 1)
+              if obj is None or not isinstance(obj, dict):
+                  print("::error::no decodable JSON object found in the "
+                        "agent output segment", file=sys.stderr)
+                  return 1
+              with open(sys.argv[2], "w", encoding="utf-8") as f:
+                  f.write(json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          PYEOF
+
+          # --- prompt assembly (the exact bytes sent to the agent) ---
+          cat > "${work}/system_prompt.txt" <<'EOF'
+          You are an autonomous verification-proposition agent for the Axiom CLI. You read a subject source file, the Axiom capability report, and the committed spec catalog. Your ONLY output is a single JSON document conforming to the Axiom BYO-Agent propositions schema v2. No markdown fences, no commentary, no text before or after the JSON.
+          EOF
+          {
+            printf '%s\n' \
+              'Emit one JSON document: the Axiom BYO-Agent proposals.json (schema v2).' \
+              '' \
+              'SUBJECT (authoritative, echo exactly):' \
+              "- repository: \"${WANT_SUBJECT_REPOSITORY}\"" \
+              "- commit: \"${WANT_SUBJECT_COMMIT}\"" \
+              '' \
+              'AGENT (your declaration):' \
+              '- id: "byo-open-weights-qwen2.5-coder-1.5b"' \
+              '- version: "q4_k_m-gguf-llamacpp"' \
+              '' \
+              'OUTPUT RULES (schema v2):' \
+              '- "schema_version" must be the number 2.' \
+              '- "subject": {"repository": string, "commit": string} — echo the subject above exactly.' \
+              '- "agent": {"id": string, "version": string}.' \
+              '- "propositions": 1 to 32 items, each with a unique "id" (max 128 chars) and a required "target" string "<module>::<symbol>". ALL propositions in this document MUST use the SAME target.' \
+              '- Each proposition is EXACTLY ONE of two forms:' \
+              '  (a) lane-form: has "specId" (non-empty string referencing a specId from the capability report) — must NOT have "logic" or "expression".' \
+              '  (b) claim-form: has "logic" (max 128 chars) and "expression" (max 4096 chars, a formal-ish statement about the target) — must NOT have "specId".' \
+              '- Optional per proposition: "source_location" {"file": string, "line": integer} and "explanation" (natural language, not evidence).' \
+              '' \
+              'MISSION:' \
+              '1. Include at least one lane-form proposition using the EQUIPPED specId that matches the target symbol toOpenArray in libp2p/utils/bytesview.nim (the slice-length law defect: the template at lines 18-19 yields length e-2b+1 instead of the inclusive law e-b+1).' \
+              '2. Include one or two claim-form contradiction candidates about the same target (e.g. forbidden-length statements), with an "expression" such as: for all e in 1..5: toOpenArray(bv,1,e).len == e.' \
+              '3. Use "source_location" {"file": "libp2p/utils/bytesview.nim", "line": 18} for the lane-form proposition.' \
+              '' \
+              "INPUT DATA — subject source (${SUBJECT_MODULE}):" \
+              '```nim'
+            cat "${SUBJECT_SOURCE_FILE}"
+            printf '%s\n' '```' '' 'INPUT DATA — ax capability --json:' '```json'
+            cat "${prov_dir}/ax_capability.json"
+            printf '%s\n' '' '```' '' "INPUT DATA — committed spec catalog, ${SCOPE_SPEC_REL}:" '```json'
+            cat "${SCOPE_SPEC_FILE}"
+            printf '%s\n' '' '```' '' 'INPUT DATA — committed spec catalog, nim_libp2p_varint_roundtrip.json (NOT_EQUIPPED lane, different target — do not use):' '```json'
+            cat "${VARINT_SPEC_FILE}"
+            printf '%s\n' '' '```' '' 'Now output ONLY the JSON document.'
+          } > "${work}/user_prompt.txt"
+
+          if [ "${PROPOSITIONS_MODE}" = "pinned" ]; then
+            # Regression fixture: byte-stable v2 document (proposals sha256
+            # beca3b0c…) — the document consumed by every campaign-001 leg
+            # before the live agent existed. Lineage: repository commit
+            # cfed3871, byo-agent-verify.yml dispatch "main" (LLM-authored,
+            # 2026-11-02 E2E; v2 migration 2026-11-10 — id added, semantics
+            # unchanged). The subject identity below must equal the campaign
+            # pins (the engine rejects disagreeing documents,
+            # SUBJECT_MISMATCH, exit 3).
+            cat > "${prop_dir}/proposals.json" <<'JSON'
+          {"schema_version":2,"subject":{"repository":"iftech/nim-libp2p","commit":"a130a7f32219909bdcda14b7f1e64d0804fc832c"},"agent":{"id":"phase3-selftest-agent","version":"1.0"},"propositions":[{"id":"bytesview-toOpenArray-bv-slice","specId":"SPEC-LIBP2P-BV-SLICE","target":"libp2p/utils/bytesview.nim::toOpenArray","source_location":{"file":"libp2p/utils/bytesview.nim","line":18},"explanation":"Phase 4 fork deployment — pinned BYO proposition (LLM-authored, 2026-11-02 E2E; schema v2 migration 2026-11-10: id added, semantics unchanged)"}]}
+          JSON
+            printf '%s\n' \
+              'pinned regression fixture — no live agent prompt was sent' \
+              '(document lineage: repository commit cfed3871, byo-agent-verify.yml dispatch "main", 2026-11-02 E2E; schema v2 migration 2026-11-10)' \
+              > "${prov_dir}/agent-prompt.txt"
+            agent_runner="pinned-regression-fixture (cfed3871 lineage)"
+            binary_sha256=""
+            model_id=""
+            model_sha256=""
+            model_license=""
+          else
+            {
+              cat "${work}/system_prompt.txt"
+              printf '\n--- USER ---\n\n'
+              cat "${work}/user_prompt.txt"
+            } > "${prov_dir}/agent-prompt.txt"
+            if [ -n "${AGENT_API_KEY:-}" ]; then
+              # External OpenAI-compatible BYO agent endpoint (secret-gated).
+              base_url="${AGENT_API_BASE_URL:-https://api.openai.com/v1}"
+              api_model="${AGENT_API_MODEL:-qwen2.5-coder-1.5b-instruct}"
+              payload_file="${work}/api_request.json"
+              jq -n \
+                --arg model "$api_model" \
+                --rawfile sys "${work}/system_prompt.txt" \
+                --rawfile user "${work}/user_prompt.txt" \
+                '{model: $model, temperature: 0,
+                  messages: [{role: "system", content: $sys},
+                             {role: "user", content: $user}]}' > "$payload_file"
+              curl -sSf --retry 3 --retry-all-errors --retry-delay 2 --max-time 300 \
+                -X POST "${base_url%/}/chat/completions" \
+                -H "Authorization: Bearer ${AGENT_API_KEY}" \
+                -H 'Content-Type: application/json' \
+                --data-binary "@${payload_file}" \
+                -o "${work}/api_response.json" \
+                || fail 'chat/completions request failed'
+              jq -e '.choices[0].message.content | type == "string"' \
+                "${work}/api_response.json" >/dev/null \
+                || fail 'chat/completions response carries no string message content'
+              jq -r '.choices[0].message.content' "${work}/api_response.json" \
+                > "${work}/agent_output.txt"
+              agent_runner="external-api ${base_url%/}/chat/completions (model ${api_model})"
+              binary_sha256=""
+              model_id="api:${api_model}"
+              model_sha256=""
+              model_license=""
+            else
+              # Default zero-secret self-contained BYO agent: llama.cpp
+              # b12340 release binary (MIT) + open-weights Qwen model
+              # (Apache-2.0), both sha256-pinned.
+              llama_tar="${work}/llama-b12340-bin-ubuntu-x64.tar.gz"
+              curl -sSfL --retry 4 --retry-all-errors --retry-delay 2 \
+                --connect-timeout 3 --max-time 600 "$LLAMA_TARBALL_URL" -o "$llama_tar" \
+                || fail 'llama.cpp b12340 binary tarball download failed'
+              printf '%s  %s\n' "$LLAMA_TARBALL_SHA256" "$llama_tar" | sha256sum -c - \
+                || fail "llama.cpp tarball sha256 mismatch (pinned $LLAMA_TARBALL_SHA256)"
+              llama_dir="${work}/llama-b12340"
+              mkdir -p "$llama_dir"
+              tar -xzf "$llama_tar" -C "$llama_dir" --strip-components=1 \
+                || fail 'llama.cpp tarball extraction failed'
+              [ -x "${llama_dir}/llama-completion" ] \
+                || fail 'llama-completion binary missing after extraction'
+              binary_sha256="$(sha256sum "${llama_dir}/llama-completion" | cut -d' ' -f1)"
+              model_file="${work}/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+              curl -sSfL --retry 4 --retry-all-errors --retry-delay 2 \
+                --connect-timeout 3 --max-time 900 "$MODEL_URL" -o "$model_file" \
+                || fail 'Qwen2.5-Coder-1.5B-Instruct GGUF download failed'
+              printf '%s  %s\n' "$MODEL_SHA256" "$model_file" | sha256sum -c - \
+                || fail "model sha256 mismatch (pinned $MODEL_SHA256)"
+              grammar_file="${work}/pure_schema_v2.gbnf"
+              cat > "$grammar_file" <<'GBNF'
+          root ::= "{" ws "\"schema_version\":" ws "2," ws "\"subject\":" ws subject "," ws "\"agent\":" ws agent "," ws "\"propositions\":" ws "[" ws lane-prop "," ws claim-prop ws "]" ws "}"
+          subject ::= "{" ws "\"repository\":" ws slug-str "," ws "\"commit\":" ws hex40-str ws "}"
+          agent ::= "{" ws "\"id\":" ws id-str "," ws "\"version\":" ws id-str ws "}"
+          lane-prop ::= "{" ws "\"id\":" ws id-str "," ws "\"target\":" ws target-str "," ws "\"specId\":" ws id-str "," ws "\"source_location\":" ws "{\"file\":" ws path-str ",\"line\":" ws int "}," ws "\"explanation\":" ws text-str ws "}"
+          claim-prop ::= "{" ws "\"id\":" ws id-str "," ws "\"target\":" ws target-str "," ws "\"logic\":" ws id-str "," ws "\"expression\":" ws expr-str "," ws "\"explanation\":" ws text-str ws "}"
+          slug-str ::= "\"" [A-Za-z0-9_.-]+ "/" [A-Za-z0-9_.-]+ "\""
+          hex40-str ::= "\"" [0-9a-f]{40} "\""
+          id-str ::= "\"" [A-Za-z0-9_.-]{1,64} "\""
+          path-str ::= "\"" [A-Za-z0-9_./-]{1,120} "\""
+          target-str ::= "\"" [A-Za-z0-9_./-]+ "::" [A-Za-z0-9_]+ "\""
+          expr-str ::= "\"" char{1,120} "\""
+          text-str ::= "\"" char{1,160} "\""
+          char ::= [^"\\\x7F\x00-\x1F]
+          int ::= [1-9] [0-9]{0,4}
+          ws ::= [ \t\n]{0,2}
+          GBNF
+              export LD_LIBRARY_PATH="${llama_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+              "${llama_dir}/llama-completion" \
+                -m "$model_file" \
+                --grammar-file "$grammar_file" \
+                -sysf "${work}/system_prompt.txt" \
+                -f "${work}/user_prompt.txt" \
+                --no-escape \
+                -n 512 \
+                --temp 0 \
+                -st \
+                -t 4 \
+                > "${work}/agent_transcript.txt" 2> "${work}/llama_stderr.log" \
+                || fail 'llama-completion run failed (see agent-work transcript and stderr)'
+              cp "${work}/agent_transcript.txt" "${work}/agent_output.txt"
+              agent_runner="llama.cpp b12340 llama-completion (MIT) + Qwen2.5-Coder-1.5B-Instruct q4_k_m (Apache-2.0)"
+              model_id="$MODEL_ID"
+              model_sha256="$MODEL_SHA256"
+              model_license="$MODEL_LICENSE"
+            fi
+            python3 "${work}/extract_json.py" "${work}/agent_output.txt" "${prop_dir}/proposals.json" \
+              || fail 'the agent output contains no decodable JSON document (grammar/API contract violation — fail-closed)'
+          fi
+
+          end_ts="$(date +%s)"
+          elapsed=$((end_ts - start_ts))
+          props_sha="$(sha256sum "${prop_dir}/proposals.json" | cut -d' ' -f1)"
+          prompt_sha=""
+          if [ "${PROPOSITIONS_MODE}" != "pinned" ]; then
+            prompt_sha="$(sha256sum "${prov_dir}/agent-prompt.txt" | cut -d' ' -f1)"
+          fi
+          cap_sha="$(sha256sum "${prov_dir}/ax_capability.json" | cut -d' ' -f1)"
+          jq -n \
+            --arg mode "${PROPOSITIONS_MODE}" \
+            --arg runner "$agent_runner" \
+            --arg bin "$binary_sha256" \
+            --arg model "$model_id" \
+            --arg msha "$model_sha256" \
+            --arg mlic "$model_license" \
+            --arg psha "$prompt_sha" \
+            --arg srepo "$WANT_SUBJECT_REPOSITORY" \
+            --arg scommit "$WANT_SUBJECT_COMMIT" \
+            --arg fsha "$SOURCE_FILE_SHA256" \
+            --arg csha "$cap_sha" \
+            --arg prsha "$props_sha" \
+            --argjson elapsed "$elapsed" \
+            '{mode: $mode, agent_runner: $runner, binary_sha256: $bin,
+              model_id: $model, model_sha256: $msha, model_license: $mlic,
+              prompt_sha256: $psha, subject_repository: $srepo,
+              subject_commit: $scommit, source_file_sha256: $fsha,
+              ax_capability_sha256: $csha, proposals_sha256: $prsha,
+              elapsed_seconds: $elapsed}' \
+            > "${prov_dir}/agent-provenance.json"
+          echo "proposals_sha256=$props_sha" >> "$GITHUB_OUTPUT"
+          echo "agent: mode ${PROPOSITIONS_MODE}, runner ${agent_runner}, ${elapsed}s, proposals sha256 ${props_sha}"
+          {
+            echo "## Job 2 — BYO AI agent (propositions generation)"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| mode | ${PROPOSITIONS_MODE} |"
+            echo "| agent runner | ${agent_runner} |"
+            echo "| model | \`${model_id}\` (license ${model_license:-n/a}) |"
+            echo "| model sha256 | \`${model_sha256}\` |"
+            echo "| binary sha256 | \`${binary_sha256}\` |"
+            echo "| elapsed | ${elapsed}s |"
+            echo "| propositions sha256 | \`${props_sha}\` |"
+            echo "| artifacts | \`propositions\` (proposals.json) + \`agent-provenance\` (provenance, prompt, capability snapshot) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Input Admission — 100% parity with the engine intake contract (fail-closed)'
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          work="${camp}/agent-work"
+          prov_dir="${camp}/agent-provenance"
+          cat > "${work}/input_admission.py" <<'PYEOF'
+          import json
+          import os
+          import sys
+
+          # Input Admission — 100% parity with src/cli/proposition_intake.nim
+          # (axiom v0.6.3). Every bound, type discipline, and document-level
+          # rejection reason mirrors the engine's own intake contract
+          # (docs/spec/byo_agent_proposition_contract.md, schema v2). One
+          # stricter workflow-side rule rides along (pre-leg, saves two
+          # adapter legs): at least one proposition must reference an
+          # EQUIPPED specId from `ax capability --json` matching
+          # WANT_VERIFICATION_SCOPE.
+          MAX_DOCUMENT_BYTES = 262144
+          SUPPORTED_SCHEMA_VERSION = 2
+          MAX_PROPOSITIONS = 32
+          MAX_ID_LENGTH = 128
+          MAX_LOGIC_LENGTH = 128
+          MAX_EXPRESSION_LENGTH = 4096
+          HEX_DIGITS = set("0123456789abcdefABCDEF")
+
+          def reject(code, detail):
+              print(f"::error::INPUT_ADMISSION {code}: {detail}")
+              sys.exit(1)
+
+          def is_int(value):
+              # JSON booleans are integers in Python but not JInt in Nim.
+              return isinstance(value, int) and not isinstance(value, bool)
+
+          def main():
+              if len(sys.argv) != 4:
+                  print("usage: input_admission.py <proposals.json> "
+                        "<capability.json> <out-summary.json>", file=sys.stderr)
+                  return 2
+              path, cap_path, summary_path = sys.argv[1], sys.argv[2], sys.argv[3]
+              want_repo = os.environ.get("WANT_SUBJECT_REPOSITORY", "")
+              want_commit = os.environ.get("WANT_SUBJECT_COMMIT", "")
+              want_scope = os.environ.get("WANT_VERIFICATION_SCOPE", "")
+
+              with open(path, "rb") as f:
+                  raw_bytes = f.read()
+              if len(raw_bytes) > MAX_DOCUMENT_BYTES:
+                  reject("BAD_SCHEMA",
+                         f"propositions document exceeds {MAX_DOCUMENT_BYTES} "
+                         f"bytes, got {len(raw_bytes)}")
+              try:
+                  doc = json.loads(raw_bytes.decode("utf-8"))
+              except (UnicodeDecodeError, ValueError) as e:
+                  reject("BAD_SCHEMA", f"propositions file is not valid JSON: {e}")
+              if not isinstance(doc, dict):
+                  reject("BAD_SCHEMA",
+                         "top-level propositions document must be a JSON object")
+
+              schema_version = doc.get("schema_version")
+              if not is_int(schema_version):
+                  reject("BAD_SCHEMA", "schema_version must be a JSON integer")
+              if schema_version != SUPPORTED_SCHEMA_VERSION:
+                  reject("BAD_SCHEMA",
+                         f"schema_version must be {SUPPORTED_SCHEMA_VERSION}, "
+                         f"got {schema_version}")
+
+              subject = doc.get("subject")
+              if not isinstance(subject, dict):
+                  reject("BAD_SCHEMA", "subject object is required")
+              repository = subject.get("repository")
+              if not isinstance(repository, str) or len(repository) == 0:
+                  reject("BAD_SCHEMA",
+                         "subject.repository must be a non-empty string")
+              commit = subject.get("commit")
+              if (not isinstance(commit, str) or len(commit) != 40
+                      or any(c not in HEX_DIGITS for c in commit)):
+                  reject("BAD_SCHEMA",
+                         "subject.commit must be a 40-hex commit claim")
+
+              agent = doc.get("agent")
+              if not isinstance(agent, dict):
+                  reject("BAD_SCHEMA", "agent object is required")
+              agent_id = agent.get("id")
+              if not isinstance(agent_id, str) or len(agent_id) == 0:
+                  reject("BAD_SCHEMA", "agent.id must be a non-empty string")
+              agent_version = agent.get("version")
+              if not isinstance(agent_version, str) or len(agent_version) == 0:
+                  reject("BAD_SCHEMA",
+                         "agent.version must be a non-empty string")
+
+              props = doc.get("propositions")
+              if not isinstance(props, list):
+                  reject("BAD_SCHEMA", "propositions must be an array")
+              if len(props) == 0:
+                  reject("NO_PROPOSALS",
+                         "propositions array is empty — at least one "
+                         "proposition is required")
+              if len(props) > MAX_PROPOSITIONS:
+                  reject("BAD_SCHEMA",
+                         f"propositions array exceeds {MAX_PROPOSITIONS} "
+                         f"entries, got {len(props)}")
+
+              seen_ids = set()
+              targets = []
+              for p in props:
+                  if not isinstance(p, dict):
+                      reject("BAD_SCHEMA", "each proposition must be an object")
+                  pid = p.get("id")
+                  if not isinstance(pid, str) or len(pid) == 0:
+                      reject("BAD_SCHEMA",
+                             "proposition.id must be a non-empty string")
+                  if len(pid) > MAX_ID_LENGTH:
+                      reject("BAD_SCHEMA",
+                             f"proposition.id exceeds {MAX_ID_LENGTH} characters")
+                  if pid in seen_ids:
+                      reject("BAD_SCHEMA",
+                             f'duplicate proposition.id "{pid}" — proposition '
+                             f"ids must be unique within the document")
+                  seen_ids.add(pid)
+                  target = p.get("target")
+                  if not isinstance(target, str) or len(target) == 0:
+                      reject("BAD_SCHEMA",
+                             "proposition.target must be a non-empty string "
+                             "(--target syntax)")
+                  targets.append(target)
+                  has_spec = "specId" in p
+                  has_claim = ("logic" in p) or ("expression" in p)
+                  if has_spec and has_claim:
+                      reject("BAD_SCHEMA",
+                             f'proposition "{pid}" must be lane-form (specId) '
+                             f"or claim-form (logic + expression), not both")
+                  if has_spec:
+                      spec_id = p["specId"]
+                      if not isinstance(spec_id, str) or len(spec_id) == 0:
+                          reject("BAD_SCHEMA",
+                                 "proposition.specId must be a non-empty string")
+                  elif has_claim:
+                      logic = p.get("logic")
+                      if not isinstance(logic, str) or len(logic) == 0:
+                          reject("BAD_SCHEMA",
+                                 "claim-form proposition.logic must be a "
+                                 "non-empty string")
+                      if len(logic) > MAX_LOGIC_LENGTH:
+                          reject("BAD_SCHEMA",
+                                 f"proposition.logic exceeds "
+                                 f"{MAX_LOGIC_LENGTH} characters")
+                      expression = p.get("expression")
+                      if (not isinstance(expression, str)
+                              or len(expression) == 0):
+                          reject("BAD_SCHEMA",
+                                 "claim-form proposition.expression must be "
+                                 "a non-empty string")
+                      if len(expression) > MAX_EXPRESSION_LENGTH:
+                          reject("BAD_SCHEMA",
+                                 f"proposition.expression exceeds "
+                                 f"{MAX_EXPRESSION_LENGTH} characters")
+                  else:
+                      reject("BAD_SCHEMA",
+                             f'proposition "{pid}" must declare lane-form '
+                             f"specId or claim-form logic + expression")
+                  if "source_location" in p:
+                      loc = p["source_location"]
+                      if not isinstance(loc, dict):
+                          reject("BAD_SCHEMA",
+                                 "proposition.source_location must be an object")
+                      loc_file = loc.get("file")
+                      if not isinstance(loc_file, str) or len(loc_file) == 0:
+                          reject("BAD_SCHEMA",
+                                 "proposition.source_location.file must be "
+                                 "a non-empty string")
+                      loc_line = loc.get("line")
+                      if not is_int(loc_line) or loc_line < 0:
+                          reject("BAD_SCHEMA",
+                                 "proposition.source_location.line must be "
+                                 "a non-negative integer")
+                  if "explanation" in p:
+                      explanation = p["explanation"]
+                      if not isinstance(explanation, str):
+                          reject("BAD_SCHEMA",
+                                 "proposition.explanation must be a string")
+
+              # Subject claim cross-check (engine parity: the campaign pins
+              # play the role of AXIOM_SUBJECT_REPOSITORY / _COMMIT).
+              if want_repo and repository != want_repo:
+                  reject("SUBJECT_MISMATCH",
+                         f'AXIOM_SUBJECT_REPOSITORY="{want_repo}" != '
+                         f'propositions subject.repository="{repository}"')
+              if want_commit and commit != want_commit:
+                  reject("SUBJECT_MISMATCH",
+                         f'AXIOM_SUBJECT_COMMIT="{want_commit}" != '
+                         f'propositions subject.commit="{commit}"')
+
+              distinct_targets = []
+              for t in targets:
+                  if t not in distinct_targets:
+                      distinct_targets.append(t)
+              if len(distinct_targets) > 1:
+                  reject("MULTIPLE_TARGETS",
+                         f"propositions name {len(distinct_targets)} distinct "
+                         f"targets ({', '.join(distinct_targets)}) — ax prove "
+                         f"consumes one --target per run")
+
+              with open(cap_path, "r", encoding="utf-8") as f:
+                  catalog = json.load(f)
+              capabilities = {c.get("specId"): c.get("status")
+                              for c in catalog.get("capabilities", [])}
+              scope_lane = any(
+                  "specId" in p and p["specId"] == want_scope
+                  and capabilities.get(p["specId"]) == "EQUIPPED"
+                  for p in props if isinstance(p, dict))
+              if not scope_lane:
+                  reject("BAD_SCHEMA",
+                         f"no proposition references an EQUIPPED specId "
+                         f"matching WANT_VERIFICATION_SCOPE ('{want_scope}') "
+                         f"from the authoritative capability catalog")
+
+              lane_count = sum(1 for p in props
+                               if isinstance(p, dict) and "specId" in p)
+              claim_count = len(props) - lane_count
+              with open(summary_path, "w", encoding="utf-8") as f:
+                  json.dump({
+                      "result": "ADMITTED",
+                      "propositions": len(props),
+                      "lane_form": lane_count,
+                      "claim_form": claim_count,
+                      "target": distinct_targets[0] if distinct_targets else "",
+                      "equipped_scope_lanes": [
+                          p["specId"] for p in props
+                          if isinstance(p, dict) and "specId" in p
+                          and p["specId"] == want_scope
+                          and capabilities.get(p["specId"]) == "EQUIPPED"],
+                  }, f, indent=2)
+                  f.write("\n")
+              print(f"input admission: ADMITTED — {len(props)} propositions "
+                    f"({lane_count} lane-form, {claim_count} claim-form), "
+                    f"target '{distinct_targets[0]}', scope {want_scope} "
+                    f"EQUIPPED")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          PYEOF
+          python3 "${work}/input_admission.py" \
+            "${camp}/propositions/proposals.json" \
+            "${prov_dir}/ax_capability.json" \
+            "${work}/admission_summary.json"
+          # Bind the admission verdict into the discovery provenance record.
+          jq --slurpfile adm "${work}/admission_summary.json" \
+            '. + {admission_summary: $adm[0]}' \
+            "${prov_dir}/agent-provenance.json" > "${prov_dir}/agent-provenance.json.tmp"
+          mv "${prov_dir}/agent-provenance.json.tmp" "${prov_dir}/agent-provenance.json"
+          adm_props="$(jq -r '.propositions' "${work}/admission_summary.json")"
+          adm_lane="$(jq -r '.lane_form' "${work}/admission_summary.json")"
+          adm_claim="$(jq -r '.claim_form' "${work}/admission_summary.json")"
+          adm_target="$(jq -r '.target' "${work}/admission_summary.json")"
+          {
+            echo "## Job 2 — Input Admission (100% parity with src/cli/proposition_intake.nim)"
+            echo ""
+            echo "| check | result |"
+            echo "|---|---|"
+            echo "| document bound | bytes <= 262144 (engine \`maxPropositionsDocumentBytes\`) |"
+            echo "| envelope | valid JSON object · \`schema_version\` == 2 integer · subject 40-hex commit · agent id/version non-empty |"
+            echo "| propositions | 1..32 · unique \`id\` <= 128 chars · non-empty \`target\` · lane XOR claim form (\`logic\` <= 128, \`expression\` <= 4096) · optional \`source_location\`/\`explanation\` shape |"
+            echo "| subject pins | repository/commit == campaign manifest pins (SUBJECT_MISMATCH guard) |"
+            echo "| single target | one distinct target across all propositions (MULTIPLE_TARGETS guard) |"
+            echo "| scope lane | >= 1 proposition references an EQUIPPED specId == VERIFICATION_SCOPE from \`ax capability --json\` |"
+            echo "| verdict | **ADMITTED** — ${adm_props} propositions (${adm_lane} lane-form, ${adm_claim} claim-form), target \`${adm_target}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Upload propositions artifact (Job-2 boundary — data only, proposals.json at the root)'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: 'propositions'
           path: '${{ runner.temp }}/campaign/propositions/proposals.json'
+          if-no-files-found: error
+
+      - name: 'Upload agent-provenance artifact (provenance + prompt + capability snapshot)'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: 'agent-provenance'
+          path: '${{ runner.temp }}/campaign/agent-provenance/'
           if-no-files-found: error
 
   exec:
@@ -251,6 +941,12 @@ jobs:
         with:
           name: 'propositions'
           path: '${{ runner.temp }}/campaign/propositions'
+
+      - name: 'Download agent-provenance artifact (non-deterministic discovery record)'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: 'agent-provenance'
+          path: '${{ runner.temp }}/campaign/agent-provenance'
 
       - name: 'Download verify-record evidence (leg A)'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -296,6 +992,40 @@ jobs:
           cp .github/axiom-campaigns/campaign-001.json "${camp}/campaign-evidence/campaign-001.json"
           cp "${camp}/verify-record-A.json" "${camp}/verify-record-B.json" "${camp}/campaign-evidence/"
           echo "parsed verify-records for legs A and B (all required fields present)"
+
+      - name: 'Stage discovery provenance + leg-A proof state into campaign evidence'
+        if: always()
+        run: |
+          set -euo pipefail
+          camp="${RUNNER_TEMP}/campaign"
+          evidence="${camp}/campaign-evidence"
+          mkdir -p "$evidence"
+          # Non-Deterministic AI Discovery Provenance — Job 2's record of
+          # which agent, which model bytes, which prompt produced the
+          # propositions document.
+          prov_src="${camp}/agent-provenance/agent-provenance.json"
+          if [ -f "$prov_src" ]; then
+            jq empty "$prov_src" || {
+              echo "::error::agent-provenance.json is not valid JSON"; exit 1; }
+            cp "$prov_src" "${evidence}/agent-provenance.json"
+            echo "agent provenance staged into campaign-evidence (mode $(jq -r '.mode' "$prov_src"), proposals sha256 $(jq -r '.proposals_sha256' "$prov_src"))"
+          else
+            echo "::warning::agent-provenance.json absent — Job-2 discovery provenance is not part of the campaign evidence (fail-visible)"
+          fi
+          # Deterministic half: leg A's persisted proof state carries the
+          # 2-axis capability rollup (display.propositions[]) —
+          # CAPABLE{verdict} vs INCAPABLE{reason} per proposition.
+          state_src="${camp}/evidence-A/ax_proof_state.json"
+          if [ -f "$state_src" ]; then
+            jq -e '.display.propositions | (type == "array") and (length >= 1)' "$state_src" >/dev/null || {
+              echo "::error::leg A ax_proof_state.json carries no display.propositions[] rollup array — malformed proof state"
+              exit 1
+            }
+            cp "$state_src" "${evidence}/ax_proof_state.json"
+            echo "leg-A proof state staged into campaign-evidence ($(jq '.display.propositions | length' "$state_src") rollup entries)"
+          else
+            echo "::warning::leg A ax_proof_state.json absent — the leg did not reach the reporting step; the rollup is not staged and the guards below classify the failure"
+          fi
 
       - name: 'Assert INPUT_MISMATCH — subject/proposals/axiom identity pins (legs + manifest + workflow)'
         run: |
@@ -351,7 +1081,7 @@ jobs:
           fi
           jq -cn --arg g "input_mismatch" '{guard:$g,pass:true}' >> "${camp}/guards.jsonl"
 
-      - name: 'Assert DETERMINISM_MISMATCH — canonical digest must be identical across legs'
+      - name: 'Assert DETERMINISM_MISMATCH — canonical digest must be real 64-hex and identical across legs'
         run: |
           set -euo pipefail
           camp="${RUNNER_TEMP}/campaign"
@@ -359,10 +1089,20 @@ jobs:
           recB="${camp}/verify-record-B.json"
           dA="$(jq -r '.canonical_digest' "$recA")"
           dB="$(jq -r '.canonical_digest' "$recB")"
-          if [ "$dA" != "$dB" ]; then
-            jq -cn --arg g "determinism_mismatch" --arg d "canonical_digest differs: A='$dA' B='$dB'" '{guard:$g,pass:false,detail:$d}' >> "${camp}/guards.jsonl"
-            echo "::error::DETERMINISM_MISMATCH — canonical_digest differs between legs (A='$dA', B='$dB')"
+          guard_fail() {
+            local detail="$1"
+            jq -cn --arg g "determinism_mismatch" --arg d "$detail" '{guard:$g,pass:false,detail:$d}' >> "${camp}/guards.jsonl"
+            echo "::error::DETERMINISM_MISMATCH — $detail"
             exit 1
+          }
+          # Real digests only: two absent/empty digests are vacuously
+          # "equal" — an unreported run must never pass as deterministic.
+          printf '%s' "$dA" | grep -Eq '^[0-9a-f]{64}$' \
+            || guard_fail "leg A canonical_digest is not 64-hex ('$dA') — an absent/empty digest must never pass as an equality"
+          printf '%s' "$dB" | grep -Eq '^[0-9a-f]{64}$' \
+            || guard_fail "leg B canonical_digest is not 64-hex ('$dB') — an absent/empty digest must never pass as an equality"
+          if [ "$dA" != "$dB" ]; then
+            guard_fail "canonical_digest differs: A='$dA' B='$dB'"
           fi
           jq -cn --arg g "determinism_mismatch" '{guard:$g,pass:true}' >> "${camp}/guards.jsonl"
 
@@ -379,12 +1119,16 @@ jobs:
             # verdict_summary is "runOutcome.verdict/gateVerdict/unitVerdict"
             # (slash-joined). The values "n/a" and "" and any composite whose
             # run-verdict slot is "n/a" (it starts with "n/a") carry no run
-            # verdict — a run without a verdict is not a verification. String
+            # verdict; any composite whose unit-verdict slot is "n/a" (it
+            # ends with "/n/a") carries no unit verdict — e.g. an
+            # all-INCAPABLE run with zero attempted propositions. Either way
+            # the run is vacuous: no verdict, no verification. String
             # splitting cannot be used here: the "n/a" sentinel itself
             # contains the separator.
             printf '%s' "$bid" | grep -Eq '^[0-9a-fA-F]{64}$' || add "leg ${leg}: engine_build_id is not 64-hex ('$bid')"
             case "$vs" in
               ""|"n/a"|n/a/*) add "leg ${leg}: verdict_summary carries no run verdict ('$vs') — a run without a verdict is not a verification" ;;
+              */n/a) add "leg ${leg}: verdict_summary carries no unit verdict ('$vs') — a run without any unit proposition verdict is not a verification" ;;
             esac
           done
           if [ -n "$violations" ]; then
@@ -575,10 +1319,60 @@ jobs:
             echo ""
             echo "Reason: ${reason}"
             echo ""
-            echo "Evidence artifact: \`campaign-evidence\` (verify-records A/B, comparison report, manifest, classification)."
+            echo "Evidence artifact: \`campaign-evidence\` (verify-records A/B, leg-A proof state, agent provenance, propositions, comparison report, manifest, classification)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 'Upload campaign evidence (verify-records · report · manifest · classification)'
+          # --- Non-Deterministic AI Discovery Provenance (Job 2) ---
+          prov="${evidence}/agent-provenance.json"
+          if [ -f "$prov" ]; then
+            {
+              echo ""
+              echo "### Non-Deterministic AI Discovery Provenance — \`agent-provenance.json\` (Job 2)"
+              echo ""
+              echo "| field | value |"
+              echo "|---|---|"
+              for field in mode agent_runner model_id model_license binary_sha256 model_sha256 prompt_sha256 subject_repository subject_commit source_file_sha256 ax_capability_sha256 proposals_sha256 elapsed_seconds; do
+                val="$(jq -r --arg f "$field" 'if has($f) and (.[$f] != "") then (.[$f] | tostring) else "(n/a)" end' "$prov")"
+                case "$field" in
+                  *_sha256) echo "| $field | \`${val}\` |" ;;
+                  *) echo "| $field | ${val} |" ;;
+                esac
+              done
+              adm="$(jq -c '.admission_summary // empty' "$prov")"
+              if [ -n "$adm" ]; then
+                echo "| admission_summary | \`${adm}\` |"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo ""
+              echo "### Non-Deterministic AI Discovery Provenance"
+              echo ""
+              echo "agent-provenance.json absent from the campaign evidence (Job 2 did not produce a discovery record)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # --- Deterministic Axiom A/B Verification — 2-axis capability rollup ---
+          state_disp="${evidence}/ax_proof_state.json"
+          if [ -f "$state_disp" ]; then
+            {
+              echo ""
+              echo "### Deterministic Axiom A/B verification — 2-axis capability rollup (leg A \`display.propositions[]\`)"
+              echo ""
+              echo "| proposition id | capability {verdict/reason} |"
+              echo "|---|---|"
+              jq -r '.display.propositions[] | "| \(.id) | \(if .verification.attempted then "\(.capability.status){\(.verification.verdict)}" else "\(.capability.status){\(.capability.reason)}" end) |"' "$state_disp"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo ""
+              echo "### Deterministic Axiom A/B verification — 2-axis capability rollup"
+              echo ""
+              echo "leg-A proof state absent — the leg did not reach the reporting step (the guards above classify the failure)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 'Upload campaign evidence (verify-records · proof state · provenance · report · manifest · classification)'
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
